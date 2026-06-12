@@ -145,6 +145,30 @@ export default function DashboardOverview() {
 
   return (
     <div className="space-y-6">
+      {/* ── Workflow-Navigation ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <a href="#/intents/veranstaltungsanmeldung" className="bg-card border border-border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center gap-4 overflow-hidden border-l-4 border-l-primary no-underline">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+            <IconUsers size={20} className="text-primary" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-sm truncate">Mitglieder anmelden</p>
+            <p className="text-xs text-muted-foreground line-clamp-2">Mehrere Mitglieder auf einmal zu einer Veranstaltung anmelden</p>
+          </div>
+          <IconChevronRight size={18} className="text-muted-foreground shrink-0" />
+        </a>
+        <a href="#/intents/jahresbeitrag-erfassen" className="bg-card border border-border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center gap-4 overflow-hidden border-l-4 border-l-primary no-underline">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+            <IconCurrencyEuro size={20} className="text-primary" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-sm truncate">Jahresbeiträge erfassen</p>
+            <p className="text-xs text-muted-foreground line-clamp-2">Beitragszahlungen für alle Mitglieder eines Jahres schnell erfassen</p>
+          </div>
+          <IconChevronRight size={18} className="text-muted-foreground shrink-0" />
+        </a>
+      </div>
+
       {/* ── KPI-Leiste ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard

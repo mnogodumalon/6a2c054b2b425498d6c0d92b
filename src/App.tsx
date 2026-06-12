@@ -6,7 +6,6 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ErrorBusProvider } from '@/components/ErrorBus';
 import { Layout } from '@/components/Layout';
 import DashboardOverview from '@/pages/DashboardOverview';
-import { WorkflowPlaceholders } from '@/components/WorkflowPlaceholders';
 import AdminPage from '@/pages/AdminPage';
 import MitgliederPage from '@/pages/MitgliederPage';
 import BeitraegeZahlungenPage from '@/pages/BeitraegeZahlungenPage';
@@ -19,6 +18,8 @@ import PublicFormVeranstaltungsteilnahmen from '@/pages/public/PublicForm_Verans
 // <public:imports>
 // </public:imports>
 // <custom:imports>
+const VeranstaltungsanmeldungPage = lazy(() => import('@/pages/intents/VeranstaltungsanmeldungPage'));
+const JahresbeitragErfassenPage = lazy(() => import('@/pages/intents/JahresbeitragErfassenPage'));
 // </custom:imports>
 
 export default function App() {
@@ -35,13 +36,15 @@ export default function App() {
               {/* <public:routes> */}
               {/* </public:routes> */}
               <Route element={<Layout />}>
-                <Route index element={<><div className="mb-8"><WorkflowPlaceholders /></div><DashboardOverview /></>} />
+                <Route index element={<DashboardOverview />} />
                 <Route path="mitglieder" element={<MitgliederPage />} />
                 <Route path="beitraege-&-zahlungen" element={<BeitraegeZahlungenPage />} />
                 <Route path="veranstaltungen" element={<VeranstaltungenPage />} />
                 <Route path="veranstaltungsteilnahmen" element={<VeranstaltungsteilnahmenPage />} />
                 <Route path="admin" element={<AdminPage />} />
                 {/* <custom:routes> */}
+                <Route path="intents/veranstaltungsanmeldung" element={<Suspense fallback={null}><VeranstaltungsanmeldungPage /></Suspense>} />
+                <Route path="intents/jahresbeitrag-erfassen" element={<Suspense fallback={null}><JahresbeitragErfassenPage /></Suspense>} />
                 {/* </custom:routes> */}
               </Route>
             </Routes>
