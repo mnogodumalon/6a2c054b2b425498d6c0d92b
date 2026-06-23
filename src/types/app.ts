@@ -21,28 +21,6 @@ export interface AttachmentInput {
   active?: boolean;
 }
 
-export interface Mitglieder {
-  record_id: string;
-  createdat: string;
-  updatedat: string | null;
-  fields: {
-    geburtsdatum?: string; // Format: YYYY-MM-DD oder ISO String
-    email?: string;
-    telefon?: string;
-    strasse?: string;
-    hausnummer?: string;
-    plz?: string;
-    ort?: string;
-    mitgliedsnummer?: string;
-    eintrittsdatum?: string; // Format: YYYY-MM-DD oder ISO String
-    mitgliedsstatus?: LookupValue;
-    iban?: string;
-    bemerkungen?: string;
-    vorname?: string;
-    nachname?: string;
-  };
-}
-
 export interface BeitraegeZahlungen {
   record_id: string;
   createdat: string;
@@ -88,45 +66,51 @@ export interface Veranstaltungsteilnahmen {
   };
 }
 
+export interface Mitglieder {
+  record_id: string;
+  createdat: string;
+  updatedat: string | null;
+  fields: {
+    geburtsdatum?: string; // Format: YYYY-MM-DD oder ISO String
+    email?: string;
+    telefon?: string;
+    strasse?: string;
+    hausnummer?: string;
+    plz?: string;
+    ort?: string;
+    mitgliedsnummer?: string;
+    eintrittsdatum?: string; // Format: YYYY-MM-DD oder ISO String
+    mitgliedsstatus?: LookupValue;
+    iban?: string;
+    bemerkungen?: string;
+    vorname?: string;
+    nachname?: string;
+  };
+}
+
 export const APP_IDS = {
-  MITGLIEDER: '6a2c051add06b14dff7ae846',
   BEITRAEGE_ZAHLUNGEN: '6a2c05202232d348547938ed',
   VERANSTALTUNGEN: '6a2c05219a64afeec0949857',
   VERANSTALTUNGSTEILNAHMEN: '6a2c05211de15074379308bd',
+  MITGLIEDER: '6a2c051add06b14dff7ae846',
 } as const;
 
 
 export const LOOKUP_OPTIONS: Record<string, Record<string, {key: string, label: string}[]>> = {
-  'mitglieder': {
-    mitgliedsstatus: [{ key: "passiv", label: "Passiv" }, { key: "ehrenmitglied", label: "Ehrenmitglied" }, { key: "ausgetreten", label: "Ausgetreten" }, { key: "aktiv", label: "Aktiv" }],
-  },
-  'beitraege_&_zahlungen': {
+  'beitraege_zahlungen': {
     zahlungsart: [{ key: "ueberweisung", label: "Überweisung" }, { key: "lastschrift", label: "Lastschrift" }, { key: "bar", label: "Barzahlung" }],
     zahlungsstatus: [{ key: "offen", label: "Offen" }, { key: "bezahlt", label: "Bezahlt" }, { key: "gemahnt", label: "Gemahnt" }, { key: "storniert", label: "Storniert" }],
   },
   'veranstaltungen': {
     veranstaltungsart: [{ key: "vortrag", label: "Vortrag" }, { key: "workshop", label: "Workshop" }, { key: "mitgliederversammlung", label: "Mitgliederversammlung" }, { key: "networking", label: "Networking" }, { key: "sonstiges", label: "Sonstiges" }],
   },
+  'mitglieder': {
+    mitgliedsstatus: [{ key: "passiv", label: "Passiv" }, { key: "ehrenmitglied", label: "Ehrenmitglied" }, { key: "ausgetreten", label: "Ausgetreten" }, { key: "aktiv", label: "Aktiv" }],
+  },
 };
 
 export const FIELD_TYPES: Record<string, Record<string, string>> = {
-  'mitglieder': {
-    'geburtsdatum': 'date/date',
-    'email': 'string/email',
-    'telefon': 'string/tel',
-    'strasse': 'string/text',
-    'hausnummer': 'string/text',
-    'plz': 'string/text',
-    'ort': 'string/text',
-    'mitgliedsnummer': 'string/text',
-    'eintrittsdatum': 'date/date',
-    'mitgliedsstatus': 'lookup/select',
-    'iban': 'string/text',
-    'bemerkungen': 'string/textarea',
-    'vorname': 'string/text',
-    'nachname': 'string/text',
-  },
-  'beitraege_&_zahlungen': {
+  'beitraege_zahlungen': {
     'mitglied': 'applookup/select',
     'beitragsjahr': 'number',
     'beitragshoehe': 'number',
@@ -153,6 +137,22 @@ export const FIELD_TYPES: Record<string, Record<string, string>> = {
     'anwesenheit': 'bool',
     'bemerkungen_teilnahme': 'string/textarea',
   },
+  'mitglieder': {
+    'geburtsdatum': 'date/date',
+    'email': 'string/email',
+    'telefon': 'string/tel',
+    'strasse': 'string/text',
+    'hausnummer': 'string/text',
+    'plz': 'string/text',
+    'ort': 'string/text',
+    'mitgliedsnummer': 'string/text',
+    'eintrittsdatum': 'date/date',
+    'mitgliedsstatus': 'lookup/select',
+    'iban': 'string/text',
+    'bemerkungen': 'string/textarea',
+    'vorname': 'string/text',
+    'nachname': 'string/text',
+  },
 };
 
 type StripLookup<T> = {
@@ -162,7 +162,7 @@ type StripLookup<T> = {
 };
 
 // Helper Types for creating new records (lookup fields as plain strings for API)
-export type CreateMitglieder = StripLookup<Mitglieder['fields']>;
 export type CreateBeitraegeZahlungen = StripLookup<BeitraegeZahlungen['fields']>;
 export type CreateVeranstaltungen = StripLookup<Veranstaltungen['fields']>;
 export type CreateVeranstaltungsteilnahmen = StripLookup<Veranstaltungsteilnahmen['fields']>;
+export type CreateMitglieder = StripLookup<Mitglieder['fields']>;

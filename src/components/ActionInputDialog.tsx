@@ -25,7 +25,15 @@ interface ActionInputDialogProps {
 }
 
 export function ActionInputDialog({ action, schema, options, onSubmit, onCancel }: ActionInputDialogProps) {
-  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const initial: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(schema.properties || {})) {
+      if (prop.default !== undefined && prop.format !== 'file') {
+        initial[key] = prop.default;
+      }
+    }
+    return initial;
+  });
   const [fileMap, setFileMap] = useState<Record<string, File>>({});
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +74,7 @@ export function ActionInputDialog({ action, schema, options, onSubmit, onCancel 
   };
 
   const renderField = (key: string, prop: InputSchemaProperty) => {
+    const placeholder = prop.examples?.[0] != null ? String(prop.examples[0]) : undefined;
     const dynamicOptions = options?.[key];
     if (dynamicOptions) {
       return (
@@ -96,7 +105,7 @@ export function ActionInputDialog({ action, schema, options, onSubmit, onCancel 
           </SelectTrigger>
           <SelectContent>
             {prop.enum.map(opt => (
-              <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+              <SelectItem key={opt} value={opt}>{prop['x-enum-descriptions']?.[opt] ?? opt}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -133,6 +142,7 @@ export function ActionInputDialog({ action, schema, options, onSubmit, onCancel 
           id={key}
           value={(values[key] as string) ?? ''}
           onChange={e => setValues(prev => ({ ...prev, [key]: e.target.value }))}
+          placeholder={placeholder}
           rows={4}
         />
       );
@@ -146,6 +156,7 @@ export function ActionInputDialog({ action, schema, options, onSubmit, onCancel 
           step="any"
           value={values[key] != null ? String(values[key]) : ''}
           onChange={e => setValues(prev => ({ ...prev, [key]: e.target.value ? Number(e.target.value) : '' }))}
+          placeholder={placeholder}
         />
       );
     }
@@ -172,6 +183,7 @@ export function ActionInputDialog({ action, schema, options, onSubmit, onCancel 
         type="text"
         value={(values[key] as string) ?? ''}
         onChange={e => setValues(prev => ({ ...prev, [key]: e.target.value }))}
+        placeholder={placeholder}
       />
     );
   };

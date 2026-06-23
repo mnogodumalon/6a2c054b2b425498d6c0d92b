@@ -1,15 +1,15 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useDashboardData } from '@/hooks/useDashboardData';
-import type { Mitglieder, BeitraegeZahlungen, Veranstaltungen, Veranstaltungsteilnahmen } from '@/types/app';
+import type { BeitraegeZahlungen, Veranstaltungen, Veranstaltungsteilnahmen, Mitglieder } from '@/types/app';
 import { LivingAppsService, extractRecordId, cleanFieldsForApi } from '@/services/livingAppsService';
-import { MitgliederDialog } from '@/components/dialogs/MitgliederDialog';
-import { MitgliederViewDialog } from '@/components/dialogs/MitgliederViewDialog';
 import { BeitraegeZahlungenDialog } from '@/components/dialogs/BeitraegeZahlungenDialog';
 import { BeitraegeZahlungenViewDialog } from '@/components/dialogs/BeitraegeZahlungenViewDialog';
 import { VeranstaltungenDialog } from '@/components/dialogs/VeranstaltungenDialog';
 import { VeranstaltungenViewDialog } from '@/components/dialogs/VeranstaltungenViewDialog';
 import { VeranstaltungsteilnahmenDialog } from '@/components/dialogs/VeranstaltungsteilnahmenDialog';
 import { VeranstaltungsteilnahmenViewDialog } from '@/components/dialogs/VeranstaltungsteilnahmenViewDialog';
+import { MitgliederDialog } from '@/components/dialogs/MitgliederDialog';
+import { MitgliederViewDialog } from '@/components/dialogs/MitgliederViewDialog';
 import { BulkEditDialog } from '@/components/dialogs/BulkEditDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageShell } from '@/components/PageShell';
@@ -36,22 +36,6 @@ function fmtDate(d?: string) {
 }
 
 // Field metadata per entity for bulk edit and column filters
-const MITGLIEDER_FIELDS = [
-  { key: 'geburtsdatum', label: 'Geburtsdatum', type: 'date/date' },
-  { key: 'email', label: 'E-Mail-Adresse', type: 'string/email' },
-  { key: 'telefon', label: 'Telefonnummer', type: 'string/tel' },
-  { key: 'strasse', label: 'Straße', type: 'string/text' },
-  { key: 'hausnummer', label: 'Hausnummer', type: 'string/text' },
-  { key: 'plz', label: 'Postleitzahl', type: 'string/text' },
-  { key: 'ort', label: 'Ort', type: 'string/text' },
-  { key: 'mitgliedsnummer', label: 'Mitgliedsnummer', type: 'string/text' },
-  { key: 'eintrittsdatum', label: 'Eintrittsdatum', type: 'date/date' },
-  { key: 'mitgliedsstatus', label: 'Mitgliedsstatus', type: 'lookup/select', options: [{ key: 'passiv', label: 'Passiv' }, { key: 'ehrenmitglied', label: 'Ehrenmitglied' }, { key: 'ausgetreten', label: 'Ausgetreten' }, { key: 'aktiv', label: 'Aktiv' }] },
-  { key: 'iban', label: 'IBAN (für Lastschrift)', type: 'string/text' },
-  { key: 'bemerkungen', label: 'Bemerkungen', type: 'string/textarea' },
-  { key: 'vorname', label: 'Vorname', type: 'string/text' },
-  { key: 'nachname', label: 'Nachname', type: 'string/text' },
-];
 const BEITRAEGEZAHLUNGEN_FIELDS = [
   { key: 'mitglied', label: 'Mitglied', type: 'applookup/select', targetEntity: 'mitglieder', targetAppId: 'MITGLIEDER', displayField: 'vorname' },
   { key: 'beitragsjahr', label: 'Beitragsjahr', type: 'number' },
@@ -79,12 +63,28 @@ const VERANSTALTUNGSTEILNAHMEN_FIELDS = [
   { key: 'anwesenheit', label: 'Anwesenheit bestätigt', type: 'bool' },
   { key: 'bemerkungen_teilnahme', label: 'Bemerkungen', type: 'string/textarea' },
 ];
+const MITGLIEDER_FIELDS = [
+  { key: 'geburtsdatum', label: 'Geburtsdatum', type: 'date/date' },
+  { key: 'email', label: 'E-Mail-Adresse', type: 'string/email' },
+  { key: 'telefon', label: 'Telefonnummer', type: 'string/tel' },
+  { key: 'strasse', label: 'Straße', type: 'string/text' },
+  { key: 'hausnummer', label: 'Hausnummer', type: 'string/text' },
+  { key: 'plz', label: 'Postleitzahl', type: 'string/text' },
+  { key: 'ort', label: 'Ort', type: 'string/text' },
+  { key: 'mitgliedsnummer', label: 'Mitgliedsnummer', type: 'string/text' },
+  { key: 'eintrittsdatum', label: 'Eintrittsdatum', type: 'date/date' },
+  { key: 'mitgliedsstatus', label: 'Mitgliedsstatus', type: 'lookup/select', options: [{ key: 'passiv', label: 'Passiv' }, { key: 'ehrenmitglied', label: 'Ehrenmitglied' }, { key: 'ausgetreten', label: 'Ausgetreten' }, { key: 'aktiv', label: 'Aktiv' }] },
+  { key: 'iban', label: 'IBAN (für Lastschrift)', type: 'string/text' },
+  { key: 'bemerkungen', label: 'Bemerkungen', type: 'string/textarea' },
+  { key: 'vorname', label: 'Vorname', type: 'string/text' },
+  { key: 'nachname', label: 'Nachname', type: 'string/text' },
+];
 
 const ENTITY_TABS = [
-  { key: 'mitglieder', label: 'Mitglieder', pascal: 'Mitglieder' },
-  { key: 'beitraege_&_zahlungen', label: 'Beiträge & Zahlungen', pascal: 'BeitraegeZahlungen' },
+  { key: 'beitraege_zahlungen', label: 'Beiträge & Zahlungen', pascal: 'BeitraegeZahlungen' },
   { key: 'veranstaltungen', label: 'Veranstaltungen', pascal: 'Veranstaltungen' },
   { key: 'veranstaltungsteilnahmen', label: 'Veranstaltungsteilnahmen', pascal: 'Veranstaltungsteilnahmen' },
+  { key: 'mitglieder', label: 'Mitglieder', pascal: 'Mitglieder' },
 ] as const;
 
 type EntityKey = typeof ENTITY_TABS[number]['key'];
@@ -93,18 +93,18 @@ export default function AdminPage() {
   const data = useDashboardData();
   const { loading, error, fetchAll } = data;
 
-  const [activeTab, setActiveTab] = useState<EntityKey>('mitglieder');
+  const [activeTab, setActiveTab] = useState<EntityKey>('beitraege_zahlungen');
   const [selectedIds, setSelectedIds] = useState<Record<EntityKey, Set<string>>>(() => ({
-    'mitglieder': new Set(),
-    'beitraege_&_zahlungen': new Set(),
+    'beitraege_zahlungen': new Set(),
     'veranstaltungen': new Set(),
     'veranstaltungsteilnahmen': new Set(),
+    'mitglieder': new Set(),
   }));
   const [filters, setFilters] = useState<Record<EntityKey, Record<string, string>>>(() => ({
-    'mitglieder': {},
-    'beitraege_&_zahlungen': {},
+    'beitraege_zahlungen': {},
     'veranstaltungen': {},
     'veranstaltungsteilnahmen': {},
+    'mitglieder': {},
   }));
   const [showFilters, setShowFilters] = useState(false);
   const [dialogState, setDialogState] = useState<{ entity: EntityKey; record: any } | null>(null);
@@ -119,10 +119,10 @@ export default function AdminPage() {
 
   const getRecords = useCallback((entity: EntityKey) => {
     switch (entity) {
-      case 'mitglieder': return (data as any).mitglieder as Mitglieder[] ?? [];
-      case 'beitraege_&_zahlungen': return (data as any).beitraegeZahlungen as BeitraegeZahlungen[] ?? [];
+      case 'beitraege_zahlungen': return (data as any).beitraegeZahlungen as BeitraegeZahlungen[] ?? [];
       case 'veranstaltungen': return (data as any).veranstaltungen as Veranstaltungen[] ?? [];
       case 'veranstaltungsteilnahmen': return (data as any).veranstaltungsteilnahmen as Veranstaltungsteilnahmen[] ?? [];
+      case 'mitglieder': return (data as any).mitglieder as Mitglieder[] ?? [];
       default: return [];
     }
   }, [data]);
@@ -130,7 +130,7 @@ export default function AdminPage() {
   const getLookupLists = useCallback((entity: EntityKey) => {
     const lists: Record<string, any[]> = {};
     switch (entity) {
-      case 'beitraege_&_zahlungen':
+      case 'beitraege_zahlungen':
         lists.mitgliederList = (data as any).mitglieder ?? [];
         break;
       case 'veranstaltungsteilnahmen':
@@ -147,7 +147,7 @@ export default function AdminPage() {
     if (!id) return '—';
     const lists = getLookupLists(entity);
     void fieldKey; // ensure used for noUnusedParameters
-    if (entity === 'beitraege_&_zahlungen' && fieldKey === 'mitglied') {
+    if (entity === 'beitraege_zahlungen' && fieldKey === 'mitglied') {
       const match = (lists.mitgliederList ?? []).find((r: any) => r.record_id === id);
       return match?.fields.vorname ?? '—';
     }
@@ -164,10 +164,10 @@ export default function AdminPage() {
 
   const getFieldMeta = useCallback((entity: EntityKey) => {
     switch (entity) {
-      case 'mitglieder': return MITGLIEDER_FIELDS;
-      case 'beitraege_&_zahlungen': return BEITRAEGEZAHLUNGEN_FIELDS;
+      case 'beitraege_zahlungen': return BEITRAEGEZAHLUNGEN_FIELDS;
       case 'veranstaltungen': return VERANSTALTUNGEN_FIELDS;
       case 'veranstaltungsteilnahmen': return VERANSTALTUNGSTEILNAHMEN_FIELDS;
+      case 'mitglieder': return MITGLIEDER_FIELDS;
       default: return [];
     }
   }, []);
@@ -262,12 +262,7 @@ export default function AdminPage() {
 
   const getServiceMethods = useCallback((entity: EntityKey) => {
     switch (entity) {
-      case 'mitglieder': return {
-        create: (fields: any) => LivingAppsService.createMitgliederEntry(fields),
-        update: (id: string, fields: any) => LivingAppsService.updateMitgliederEntry(id, fields),
-        remove: (id: string) => LivingAppsService.deleteMitgliederEntry(id),
-      };
-      case 'beitraege_&_zahlungen': return {
+      case 'beitraege_zahlungen': return {
         create: (fields: any) => LivingAppsService.createBeitraegeZahlungenEntry(fields),
         update: (id: string, fields: any) => LivingAppsService.updateBeitraegeZahlungenEntry(id, fields),
         remove: (id: string) => LivingAppsService.deleteBeitraegeZahlungenEntry(id),
@@ -281,6 +276,11 @@ export default function AdminPage() {
         create: (fields: any) => LivingAppsService.createVeranstaltungsteilnahmenEntry(fields),
         update: (id: string, fields: any) => LivingAppsService.updateVeranstaltungsteilnahmenEntry(id, fields),
         remove: (id: string) => LivingAppsService.deleteVeranstaltungsteilnahmenEntry(id),
+      };
+      case 'mitglieder': return {
+        create: (fields: any) => LivingAppsService.createMitgliederEntry(fields),
+        update: (id: string, fields: any) => LivingAppsService.updateMitgliederEntry(id, fields),
+        remove: (id: string) => LivingAppsService.deleteMitgliederEntry(id),
       };
       default: return null;
     }
@@ -622,22 +622,12 @@ export default function AdminPage() {
         </Table>
       </div>
 
-      {(createEntity === 'mitglieder' || dialogState?.entity === 'mitglieder') && (
-        <MitgliederDialog
-          open={createEntity === 'mitglieder' || dialogState?.entity === 'mitglieder'}
-          onClose={() => { setCreateEntity(null); setDialogState(null); }}
-          onSubmit={dialogState?.entity === 'mitglieder' ? handleUpdate : (fields: any) => handleCreate('mitglieder', fields)}
-          defaultValues={dialogState?.entity === 'mitglieder' ? dialogState.record?.fields : undefined}
-          enablePhotoScan={AI_PHOTO_SCAN['Mitglieder']}
-          enablePhotoLocation={AI_PHOTO_LOCATION['Mitglieder']}
-        />
-      )}
-      {(createEntity === 'beitraege_&_zahlungen' || dialogState?.entity === 'beitraege_&_zahlungen') && (
+      {(createEntity === 'beitraege_zahlungen' || dialogState?.entity === 'beitraege_zahlungen') && (
         <BeitraegeZahlungenDialog
-          open={createEntity === 'beitraege_&_zahlungen' || dialogState?.entity === 'beitraege_&_zahlungen'}
+          open={createEntity === 'beitraege_zahlungen' || dialogState?.entity === 'beitraege_zahlungen'}
           onClose={() => { setCreateEntity(null); setDialogState(null); }}
-          onSubmit={dialogState?.entity === 'beitraege_&_zahlungen' ? handleUpdate : (fields: any) => handleCreate('beitraege_&_zahlungen', fields)}
-          defaultValues={dialogState?.entity === 'beitraege_&_zahlungen' ? dialogState.record?.fields : undefined}
+          onSubmit={dialogState?.entity === 'beitraege_zahlungen' ? handleUpdate : (fields: any) => handleCreate('beitraege_zahlungen', fields)}
+          defaultValues={dialogState?.entity === 'beitraege_zahlungen' ? dialogState.record?.fields : undefined}
           mitgliederList={(data as any).mitglieder ?? []}
           enablePhotoScan={AI_PHOTO_SCAN['BeitraegeZahlungen']}
           enablePhotoLocation={AI_PHOTO_LOCATION['BeitraegeZahlungen']}
@@ -665,20 +655,22 @@ export default function AdminPage() {
           enablePhotoLocation={AI_PHOTO_LOCATION['Veranstaltungsteilnahmen']}
         />
       )}
-      {viewState?.entity === 'mitglieder' && (
-        <MitgliederViewDialog
-          open={viewState?.entity === 'mitglieder'}
-          onClose={() => setViewState(null)}
-          record={viewState?.record}
-          onEdit={(r: any) => { setViewState(null); setDialogState({ entity: 'mitglieder', record: r }); }}
+      {(createEntity === 'mitglieder' || dialogState?.entity === 'mitglieder') && (
+        <MitgliederDialog
+          open={createEntity === 'mitglieder' || dialogState?.entity === 'mitglieder'}
+          onClose={() => { setCreateEntity(null); setDialogState(null); }}
+          onSubmit={dialogState?.entity === 'mitglieder' ? handleUpdate : (fields: any) => handleCreate('mitglieder', fields)}
+          defaultValues={dialogState?.entity === 'mitglieder' ? dialogState.record?.fields : undefined}
+          enablePhotoScan={AI_PHOTO_SCAN['Mitglieder']}
+          enablePhotoLocation={AI_PHOTO_LOCATION['Mitglieder']}
         />
       )}
-      {viewState?.entity === 'beitraege_&_zahlungen' && (
+      {viewState?.entity === 'beitraege_zahlungen' && (
         <BeitraegeZahlungenViewDialog
-          open={viewState?.entity === 'beitraege_&_zahlungen'}
+          open={viewState?.entity === 'beitraege_zahlungen'}
           onClose={() => setViewState(null)}
           record={viewState?.record}
-          onEdit={(r: any) => { setViewState(null); setDialogState({ entity: 'beitraege_&_zahlungen', record: r }); }}
+          onEdit={(r: any) => { setViewState(null); setDialogState({ entity: 'beitraege_zahlungen', record: r }); }}
           mitgliederList={(data as any).mitglieder ?? []}
         />
       )}
@@ -698,6 +690,14 @@ export default function AdminPage() {
           onEdit={(r: any) => { setViewState(null); setDialogState({ entity: 'veranstaltungsteilnahmen', record: r }); }}
           mitgliederList={(data as any).mitglieder ?? []}
           veranstaltungenList={(data as any).veranstaltungen ?? []}
+        />
+      )}
+      {viewState?.entity === 'mitglieder' && (
+        <MitgliederViewDialog
+          open={viewState?.entity === 'mitglieder'}
+          onClose={() => setViewState(null)}
+          record={viewState?.record}
+          onEdit={(r: any) => { setViewState(null); setDialogState({ entity: 'mitglieder', record: r }); }}
         />
       )}
 

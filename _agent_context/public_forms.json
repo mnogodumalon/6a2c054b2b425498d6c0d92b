@@ -2,31 +2,7 @@
   "version": 1,
   "forms": [
     {
-      "entity": "mitglieder",
-      "app_id": "6a2c051add06b14dff7ae846",
-      "path": "/rest/apps/6a2c051add06b14dff7ae846/records",
-      "allowed_fields": [
-        "geburtsdatum",
-        "email",
-        "telefon",
-        "strasse",
-        "hausnummer",
-        "plz",
-        "ort",
-        "mitgliedsnummer",
-        "eintrittsdatum",
-        "mitgliedsstatus",
-        "iban",
-        "bemerkungen",
-        "vorname",
-        "nachname"
-      ],
-      "pow": true,
-      "pow_difficulty": 50000,
-      "title": "Mitglieder — Formular"
-    },
-    {
-      "entity": "beitraege_&_zahlungen",
+      "entity": "beitraege_zahlungen",
       "app_id": "6a2c05202232d348547938ed",
       "path": "/rest/apps/6a2c05202232d348547938ed/records",
       "allowed_fields": [
@@ -72,6 +48,30 @@
       "pow": true,
       "pow_difficulty": 50000,
       "title": "Veranstaltungsteilnahmen — Formular"
+    },
+    {
+      "entity": "mitglieder",
+      "app_id": "6a2c051add06b14dff7ae846",
+      "path": "/rest/apps/6a2c051add06b14dff7ae846/records",
+      "allowed_fields": [
+        "geburtsdatum",
+        "email",
+        "telefon",
+        "strasse",
+        "hausnummer",
+        "plz",
+        "ort",
+        "mitgliedsnummer",
+        "eintrittsdatum",
+        "mitgliedsstatus",
+        "iban",
+        "bemerkungen",
+        "vorname",
+        "nachname"
+      ],
+      "pow": true,
+      "pow_difficulty": 50000,
+      "title": "Mitglieder — Formular"
     }
   ]
 }

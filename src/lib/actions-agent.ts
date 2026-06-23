@@ -7,6 +7,9 @@ export interface InputSchemaProperty {
   description?: string;
   format?: string;
   enum?: string[];
+  default?: unknown;
+  examples?: unknown[];
+  "x-enum-descriptions"?: Record<string, string>;
 }
 
 export interface InputSchema {

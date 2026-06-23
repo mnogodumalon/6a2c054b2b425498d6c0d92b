@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { LivingAppsService, extractRecordId, createRecordUrl } from '@/services/livingAppsService';
 import type { Veranstaltungen } from '@/types/app';
 import { APP_IDS } from '@/types/app';
@@ -11,7 +12,6 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { IconPencil, IconTrash, IconPlus, IconSearch, IconArrowsUpDown, IconArrowUp, IconArrowDown } from '@tabler/icons-react';
 import { VeranstaltungenDialog } from '@/components/dialogs/VeranstaltungenDialog';
-import { VeranstaltungenViewDialog } from '@/components/dialogs/VeranstaltungenViewDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageShell } from '@/components/PageShell';
 import { AI_PHOTO_SCAN, AI_PHOTO_LOCATION } from '@/config/ai-features';
@@ -24,13 +24,13 @@ function formatDate(d?: string) {
 }
 
 export default function VeranstaltungenPage() {
+  const navigate = useNavigate();
   const [records, setRecords] = useState<Veranstaltungen[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<Veranstaltungen | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Veranstaltungen | null>(null);
-  const [viewingRecord, setViewingRecord] = useState<Veranstaltungen | null>(null);
   const [sortKey, setSortKey] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -187,7 +187,7 @@ export default function VeranstaltungenPage() {
           </TableHeader>
           <TableBody>
             {sortRecords(filtered).map(record => (
-              <TableRow key={record.record_id} className="hover:bg-muted/50 transition-colors cursor-pointer" onClick={(e) => { if ((e.target as HTMLElement).closest('button, [role="checkbox"]')) return; setViewingRecord(record); }}>
+              <TableRow key={record.record_id} className="hover:bg-muted/50 transition-colors cursor-pointer" onClick={(e) => { if ((e.target as HTMLElement).closest('button, [role="checkbox"]')) return; navigate(`/veranstaltungen/${record.record_id}`); }}>
                 <TableCell className="font-medium">{record.fields.titel ?? '—'}</TableCell>
                 <TableCell className="max-w-xs"><span className="truncate block">{record.fields.beschreibung ?? '—'}</span></TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(record.fields.datum_uhrzeit)}</TableCell>
@@ -238,12 +238,6 @@ export default function VeranstaltungenPage() {
         description="Soll dieser Eintrag wirklich gelöscht werden? Diese Aktion kann nicht rückgängig gemacht werden."
       />
 
-      <VeranstaltungenViewDialog
-        open={!!viewingRecord}
-        onClose={() => setViewingRecord(null)}
-        record={viewingRecord}
-        onEdit={(r) => { setViewingRecord(null); setEditingRecord(r); }}
-      />
     </PageShell>
   );
 }

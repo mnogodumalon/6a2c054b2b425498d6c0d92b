@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Veranstaltungen } from '@/types/app';
-import { APP_IDS } from '@/types/app';
+import type { Veranstaltungen, LookupValue } from '@/types/app';
+import { APP_IDS, LOOKUP_OPTIONS } from '@/types/app';
 import { extractRecordId, createRecordUrl, cleanFieldsForApi, getUserProfile } from '@/services/livingAppsService';
 import {
   Dialog, DialogContent, DialogHeader,
@@ -16,7 +16,7 @@ import { AttachmentsSection } from '@/components/AttachmentsSection';
 import { Textarea } from '@/components/ui/textarea';
 import { DatePicker } from '@/components/DatePicker';
 import { Checkbox } from '@/components/ui/checkbox';
-import { IconCamera, IconChevronDown, IconCircleCheck, IconClipboard, IconFileText, IconLoader2, IconPhotoPlus, IconSparkles, IconUpload, IconX } from '@tabler/icons-react';
+import { IconAlertCircle, IconCamera, IconChevronDown, IconCircleCheck, IconClipboard, IconFileText, IconLoader2, IconPhotoPlus, IconSparkles, IconUpload, IconX } from '@tabler/icons-react';
 import { fileToDataUri, extractFromInput, extractPhotoMeta, reverseGeocode } from '@/lib/ai';
 import { lookupKey } from '@/lib/formatters';
 
@@ -24,27 +24,52 @@ interface VeranstaltungenDialogProps {
   open: boolean;
   onClose: () => void;
   onSubmit: (fields: Veranstaltungen['fields']) => Promise<void>;
-  defaultValues?: Veranstaltungen['fields'];
+  /** SHAPE-TOLERANT: lookup fields accept the bare key (string) or the
+   *  LookupValue object; applookup fields the bare record id or the full
+   *  record URL — the dialog normalizes both. */
+  defaultValues?: Omit<Veranstaltungen['fields'], 'veranstaltungsart'> & {
+    veranstaltungsart?: LookupValue | string;
+  };
   /** Record id when editing — enables the attachments section. Omit on create. */
   recordId?: string;
   enablePhotoScan?: boolean;
   enablePhotoLocation?: boolean;
 }
 
+// defaultValues are SHAPE-TOLERANT: the dialog resolves bare lookup keys via
+// its own options and bare record ids via the field's target app — consumers
+// never carry the LookupValue/record-URL shape in their head.
+const NORMALIZE_LOOKUPS: Record<string, readonly { key: string; label: string }[]> = {
+  veranstaltungsart: LOOKUP_OPTIONS['veranstaltungen']?.['veranstaltungsart'] ?? [],
+};
+function normalizeDefaults(values: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const [k, opts] of Object.entries(NORMALIZE_LOOKUPS)) {
+    const v = out[k];
+    if (typeof v === 'string') out[k] = opts.find(o => o.key === v) ?? { key: v, label: v };
+    else if (Array.isArray(v)) out[k] = v.map(x => (typeof x === 'string' ? opts.find(o => o.key === x) ?? { key: x, label: x } : x));
+  }
+  return out;
+}
+
 export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, recordId, enablePhotoScan = true, enablePhotoLocation = true }: VeranstaltungenDialogProps) {
   const [fields, setFields] = useState<Partial<Veranstaltungen['fields']>>({});
   const [saving, setSaving] = useState(false);
+  const normalizedDefaults = useMemo<Record<string, unknown> | undefined>(
+    () => (defaultValues ? normalizeDefaults(defaultValues as Record<string, unknown>) : undefined),
+    [defaultValues],
+  );
   // Dirty-tracking: in edit-mode the Speichern button is disabled until the
   // user actually changes something. JSON.stringify is good enough for our
   // fields (plain values + LookupValue objects + string arrays).
   const isDirty = useMemo(() => {
-    if (!defaultValues) return true;  // create-mode: always allow submit
+    if (!normalizedDefaults) return true;  // create-mode: always allow submit
     try {
-      return JSON.stringify(fields) !== JSON.stringify(defaultValues);
+      return JSON.stringify(fields) !== JSON.stringify(normalizedDefaults);
     } catch {
       return true;
     }
-  }, [fields, defaultValues]);
+  }, [fields, normalizedDefaults]);
   const [aiOpen, setAiOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
@@ -94,12 +119,13 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
 
   useEffect(() => {
     if (open) {
-      setFields(applyDefaults((defaultValues ?? {}) as Record<string, unknown>, formEnhancements.defaults) as Partial<Veranstaltungen['fields']>);
+      setFields(applyDefaults(normalizedDefaults ?? {}, formEnhancements.defaults) as Partial<Veranstaltungen['fields']>);
       setPreview(null);
       setScanSuccess(false);
       setAiText('');
+      setSubmitError(null);
     }
-  }, [open, defaultValues]);
+  }, [open, normalizedDefaults]);
   useEffect(() => {
     try { localStorage.setItem('ai-use-personal-info', String(usePersonalInfo)); } catch {}
   }, [usePersonalInfo]);
@@ -117,9 +143,16 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
     }
   }
 
+  // Submit errors surface IN the dialog (it is modal — a banner in the page
+  // body would be hidden behind it). A consumer onSubmit that THROWS (the
+  // documented "throw to prevent closing" validation pattern) lands here:
+  // the dialog stays open, nothing is saved, the message is visible.
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setSubmitError(null);
     try {
       // Fill empty number slots from computed values; user-typed values always win.
       // CRITICAL: only backend-mapped keys may be backfilled. Virtual computeds
@@ -138,6 +171,8 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
       const clean = cleanFieldsForApi(merged, 'veranstaltungen');
       await onSubmit(clean as Veranstaltungen['fields']);
       onClose();
+    } catch (err) {
+      setSubmitError(err instanceof Error && err.message ? err.message : 'Speichern fehlgeschlagen.');
     } finally {
       setSaving(false);
     }
@@ -244,7 +279,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="titel">Titel der Veranstaltung</Label>
         <Input
           id="titel"
-          placeholder="z. B. Machine Learning Basics"
+          placeholder=""
           value={fields.titel ?? ''}
           onChange={e => setFields(f => ({ ...f, titel: e.target.value }))}
         />
@@ -255,7 +290,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="beschreibung">Beschreibung</Label>
         <Textarea
           id="beschreibung"
-          placeholder="Thema, Agenda, Vorkenntnisse..."
+          placeholder=""
           value={fields.beschreibung ?? ''}
           onChange={e => setFields(f => ({ ...f, beschreibung: e.target.value }))}
           rows={3}
@@ -267,7 +302,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="datum_uhrzeit">Datum & Uhrzeit</Label>
         <DatePicker
           id="datum_uhrzeit"
-          placeholder="Wann und um welche Uhrzeit?"
+          placeholder=""
           mode="datetime"
           value={fields.datum_uhrzeit ?? null}
           onChange={v => setFields(f => ({ ...f, datum_uhrzeit: v ?? undefined }))}
@@ -279,7 +314,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="anmeldeschluss">Anmeldeschluss</Label>
         <DatePicker
           id="anmeldeschluss"
-          placeholder="Letzter Anmeldetermin"
+          placeholder=""
           mode="date"
           value={fields.anmeldeschluss ?? null}
           onChange={v => setFields(f => ({ ...f, anmeldeschluss: v ?? undefined }))}
@@ -363,7 +398,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="veranstaltungsort">Veranstaltungsort</Label>
         <Input
           id="veranstaltungsort"
-          placeholder="z. B. Universität Bayreuth, Raum 4.1"
+          placeholder=""
           value={fields.veranstaltungsort ?? ''}
           onChange={e => setFields(f => ({ ...f, veranstaltungsort: e.target.value }))}
         />
@@ -377,7 +412,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
           type="number"
           step="any"
           {...numberInputProps(formEnhancements, 'max_teilnehmer')}
-          placeholder="z. B. 30"
+          placeholder=""
           value={fields.max_teilnehmer !== undefined ? fields.max_teilnehmer : (computedValues['max_teilnehmer'] ?? '')}
           onChange={e => setFields(f => ({ ...f, max_teilnehmer: clampNumberValue(formEnhancements, 'max_teilnehmer', e.target.value) }))}
         />
@@ -388,7 +423,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="verantwortlicher">Verantwortliche Person</Label>
         <Input
           id="verantwortlicher"
-          placeholder="z. B. Max Mustermann"
+          placeholder=""
           value={fields.verantwortlicher ?? ''}
           onChange={e => setFields(f => ({ ...f, verantwortlicher: e.target.value }))}
         />
@@ -399,7 +434,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="bemerkungen_veranstaltung">Bemerkungen</Label>
         <Textarea
           id="bemerkungen_veranstaltung"
-          placeholder="Besonderheiten, Equipment, Catering..."
+          placeholder=""
           value={fields.bemerkungen_veranstaltung ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_veranstaltung: e.target.value }))}
           rows={3}
@@ -766,6 +801,12 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
               </div>
             )}
           </div>
+          {submitError && (
+            <div className="flex items-start gap-2 border-t border-destructive/20 bg-destructive/10 px-6 py-2.5 text-sm text-destructive" role="alert">
+              <IconAlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">{submitError}</span>
+            </div>
+          )}
           <DialogFooter className="sticky bottom-0 border-t bg-background/95 backdrop-blur px-6 py-3 gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Abbrechen</Button>
             <Button

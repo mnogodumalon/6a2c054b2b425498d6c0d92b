@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Mitglieder } from '@/types/app';
-import { APP_IDS } from '@/types/app';
+import type { Mitglieder, LookupValue } from '@/types/app';
+import { APP_IDS, LOOKUP_OPTIONS } from '@/types/app';
 import { extractRecordId, createRecordUrl, cleanFieldsForApi, getUserProfile } from '@/services/livingAppsService';
 import {
   Dialog, DialogContent, DialogHeader,
@@ -16,7 +16,7 @@ import { AttachmentsSection } from '@/components/AttachmentsSection';
 import { Textarea } from '@/components/ui/textarea';
 import { DatePicker } from '@/components/DatePicker';
 import { Checkbox } from '@/components/ui/checkbox';
-import { IconCamera, IconChevronDown, IconCircleCheck, IconClipboard, IconFileText, IconLoader2, IconPhotoPlus, IconSparkles, IconUpload, IconX } from '@tabler/icons-react';
+import { IconAlertCircle, IconCamera, IconChevronDown, IconCircleCheck, IconClipboard, IconFileText, IconLoader2, IconPhotoPlus, IconSparkles, IconUpload, IconX } from '@tabler/icons-react';
 import { fileToDataUri, extractFromInput, extractPhotoMeta, reverseGeocode } from '@/lib/ai';
 import { lookupKey } from '@/lib/formatters';
 
@@ -24,27 +24,52 @@ interface MitgliederDialogProps {
   open: boolean;
   onClose: () => void;
   onSubmit: (fields: Mitglieder['fields']) => Promise<void>;
-  defaultValues?: Mitglieder['fields'];
+  /** SHAPE-TOLERANT: lookup fields accept the bare key (string) or the
+   *  LookupValue object; applookup fields the bare record id or the full
+   *  record URL — the dialog normalizes both. */
+  defaultValues?: Omit<Mitglieder['fields'], 'mitgliedsstatus'> & {
+    mitgliedsstatus?: LookupValue | string;
+  };
   /** Record id when editing — enables the attachments section. Omit on create. */
   recordId?: string;
   enablePhotoScan?: boolean;
   enablePhotoLocation?: boolean;
 }
 
+// defaultValues are SHAPE-TOLERANT: the dialog resolves bare lookup keys via
+// its own options and bare record ids via the field's target app — consumers
+// never carry the LookupValue/record-URL shape in their head.
+const NORMALIZE_LOOKUPS: Record<string, readonly { key: string; label: string }[]> = {
+  mitgliedsstatus: LOOKUP_OPTIONS['mitglieder']?.['mitgliedsstatus'] ?? [],
+};
+function normalizeDefaults(values: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const [k, opts] of Object.entries(NORMALIZE_LOOKUPS)) {
+    const v = out[k];
+    if (typeof v === 'string') out[k] = opts.find(o => o.key === v) ?? { key: v, label: v };
+    else if (Array.isArray(v)) out[k] = v.map(x => (typeof x === 'string' ? opts.find(o => o.key === x) ?? { key: x, label: x } : x));
+  }
+  return out;
+}
+
 export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recordId, enablePhotoScan = true, enablePhotoLocation = true }: MitgliederDialogProps) {
   const [fields, setFields] = useState<Partial<Mitglieder['fields']>>({});
   const [saving, setSaving] = useState(false);
+  const normalizedDefaults = useMemo<Record<string, unknown> | undefined>(
+    () => (defaultValues ? normalizeDefaults(defaultValues as Record<string, unknown>) : undefined),
+    [defaultValues],
+  );
   // Dirty-tracking: in edit-mode the Speichern button is disabled until the
   // user actually changes something. JSON.stringify is good enough for our
   // fields (plain values + LookupValue objects + string arrays).
   const isDirty = useMemo(() => {
-    if (!defaultValues) return true;  // create-mode: always allow submit
+    if (!normalizedDefaults) return true;  // create-mode: always allow submit
     try {
-      return JSON.stringify(fields) !== JSON.stringify(defaultValues);
+      return JSON.stringify(fields) !== JSON.stringify(normalizedDefaults);
     } catch {
       return true;
     }
-  }, [fields, defaultValues]);
+  }, [fields, normalizedDefaults]);
   const [aiOpen, setAiOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
@@ -94,12 +119,13 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
 
   useEffect(() => {
     if (open) {
-      setFields(applyDefaults((defaultValues ?? {}) as Record<string, unknown>, formEnhancements.defaults) as Partial<Mitglieder['fields']>);
+      setFields(applyDefaults(normalizedDefaults ?? {}, formEnhancements.defaults) as Partial<Mitglieder['fields']>);
       setPreview(null);
       setScanSuccess(false);
       setAiText('');
+      setSubmitError(null);
     }
-  }, [open, defaultValues]);
+  }, [open, normalizedDefaults]);
   useEffect(() => {
     try { localStorage.setItem('ai-use-personal-info', String(usePersonalInfo)); } catch {}
   }, [usePersonalInfo]);
@@ -117,9 +143,16 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
     }
   }
 
+  // Submit errors surface IN the dialog (it is modal — a banner in the page
+  // body would be hidden behind it). A consumer onSubmit that THROWS (the
+  // documented "throw to prevent closing" validation pattern) lands here:
+  // the dialog stays open, nothing is saved, the message is visible.
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setSubmitError(null);
     try {
       // Fill empty number slots from computed values; user-typed values always win.
       // CRITICAL: only backend-mapped keys may be backfilled. Virtual computeds
@@ -138,6 +171,8 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
       const clean = cleanFieldsForApi(merged, 'mitglieder');
       await onSubmit(clean as Mitglieder['fields']);
       onClose();
+    } catch (err) {
+      setSubmitError(err instanceof Error && err.message ? err.message : 'Speichern fehlgeschlagen.');
     } finally {
       setSaving(false);
     }
@@ -244,7 +279,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="geburtsdatum">Geburtsdatum</Label>
         <DatePicker
           id="geburtsdatum"
-          placeholder="Wann wurdest du geboren?"
+          placeholder=""
           mode="date"
           value={fields.geburtsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, geburtsdatum: v ?? undefined }))}
@@ -257,7 +292,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Input
           id="email"
           type="email"
-          placeholder="z. B. max@example.com"
+          placeholder=""
           value={fields.email ?? ''}
           onChange={e => setFields(f => ({ ...f, email: e.target.value }))}
         />
@@ -278,7 +313,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="strasse">Straße</Label>
         <Input
           id="strasse"
-          placeholder="z. B. Maxstraße"
+          placeholder=""
           value={fields.strasse ?? ''}
           onChange={e => setFields(f => ({ ...f, strasse: e.target.value }))}
         />
@@ -289,7 +324,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="hausnummer">Hausnummer</Label>
         <Input
           id="hausnummer"
-          placeholder="z. B. 42"
+          placeholder=""
           value={fields.hausnummer ?? ''}
           onChange={e => setFields(f => ({ ...f, hausnummer: e.target.value }))}
         />
@@ -300,7 +335,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="plz">Postleitzahl</Label>
         <Input
           id="plz"
-          placeholder="z. B. 95444"
+          placeholder=""
           value={fields.plz ?? ''}
           onChange={e => setFields(f => ({ ...f, plz: e.target.value }))}
         />
@@ -311,7 +346,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="ort">Ort</Label>
         <Input
           id="ort"
-          placeholder="z. B. Bayreuth"
+          placeholder=""
           value={fields.ort ?? ''}
           onChange={e => setFields(f => ({ ...f, ort: e.target.value }))}
         />
@@ -322,7 +357,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="mitgliedsnummer">Mitgliedsnummer</Label>
         <Input
           id="mitgliedsnummer"
-          placeholder="z. B. BAI-2024-001"
+          placeholder=""
           value={fields.mitgliedsnummer ?? ''}
           onChange={e => setFields(f => ({ ...f, mitgliedsnummer: e.target.value }))}
         />
@@ -333,7 +368,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="eintrittsdatum">Eintrittsdatum</Label>
         <DatePicker
           id="eintrittsdatum"
-          placeholder="Wann trittst du bei?"
+          placeholder=""
           mode="date"
           value={fields.eintrittsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, eintrittsdatum: v ?? undefined }))}
@@ -404,7 +439,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="iban">IBAN (für Lastschrift)</Label>
         <Input
           id="iban"
-          placeholder="z. B. DE89 3704 0044 0532 0130 00"
+          placeholder=""
           value={fields.iban ?? ''}
           onChange={e => setFields(f => ({ ...f, iban: e.target.value }))}
         />
@@ -415,7 +450,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="bemerkungen">Bemerkungen</Label>
         <Textarea
           id="bemerkungen"
-          placeholder="Notizen, Kontaktpräferenzen, Allergien..."
+          placeholder=""
           value={fields.bemerkungen ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen: e.target.value }))}
           rows={3}
@@ -427,7 +462,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="vorname">Vorname</Label>
         <Input
           id="vorname"
-          placeholder="z. B. Max"
+          placeholder=""
           value={fields.vorname ?? ''}
           onChange={e => setFields(f => ({ ...f, vorname: e.target.value }))}
         />
@@ -438,7 +473,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="nachname">Nachname</Label>
         <Input
           id="nachname"
-          placeholder="z. B. Mustermann"
+          placeholder=""
           value={fields.nachname ?? ''}
           onChange={e => setFields(f => ({ ...f, nachname: e.target.value }))}
         />
@@ -804,6 +839,12 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
               </div>
             )}
           </div>
+          {submitError && (
+            <div className="flex items-start gap-2 border-t border-destructive/20 bg-destructive/10 px-6 py-2.5 text-sm text-destructive" role="alert">
+              <IconAlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">{submitError}</span>
+            </div>
+          )}
           <DialogFooter className="sticky bottom-0 border-t bg-background/95 backdrop-blur px-6 py-3 gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Abbrechen</Button>
             <Button

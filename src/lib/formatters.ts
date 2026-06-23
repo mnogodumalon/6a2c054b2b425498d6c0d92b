@@ -6,6 +6,11 @@ export function formatDate(s: string | undefined) {
   try { return format(parseISO(s), 'dd.MM.yyyy', { locale: de }); } catch { return s; }
 }
 
+export function formatDateTime(s: string | undefined) {
+  if (!s) return '—';
+  try { return format(parseISO(s), 'dd.MM.yyyy, HH:mm', { locale: de }); } catch { return s; }
+}
+
 export function formatCurrency(v: number | undefined) {
   if (v == null) return '—';
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(v);
