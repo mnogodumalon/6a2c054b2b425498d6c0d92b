@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "BeitraegeZahlungen": {
+      "placeholders_set": 7,
+      "defaults_keys": ["beitragsjahr", "zahlungsdatum", "zahlungsstatus"],
+      "computed_keys": [],
+      "reason": "Reine Zahlungsbelege ohne berechenbare Komponente. Keine Preis-Targets in applookup, keine Datumspaare für dateDiff, keine Multiplikationen."
+    },
+    "Veranstaltungen": {
+      "placeholders_set": 9,
+      "defaults_keys": ["datum_uhrzeit", "anmeldeschluss", "veranstaltungsart", "max_teilnehmer"],
+      "computed_keys": [],
+      "reason": "Reine Veranstaltungs-Stammdaten. Datum und Anmeldeschluss sind keine Arbeits-Paarung (nicht Start+Ende eines Slots), keine applookups mit Preisen, keine Multiplikationen."
+    },
+    "Veranstaltungsteilnahmen": {
+      "placeholders_set": 5,
+      "defaults_keys": ["anmeldedatum"],
+      "computed_keys": [],
+      "reason": "Assoziations-Entity zwischen Mitgliedern und Veranstaltungen. max_teilnehmer ist Kapazitäts-Info (nicht Rechengröße), keine Preis-Targets, keine dateDiff sinnvoll."
+    },
+    "Mitglieder": {
+      "placeholders_set": 13,
+      "defaults_keys": ["eintrittsdatum", "mitgliedsstatus"],
+      "computed_keys": [],
+      "reason": "Reine Mitgliederstammdaten. Zwei Daten (Geburt + Eintritt) sind semantisch unabhängig, keine numerischen Felder für Berechnung, keine applookup-Ketten mit Preisen."
+    }
+  }
+}
