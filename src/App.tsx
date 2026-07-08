@@ -22,6 +22,8 @@ import PublicFormMitglieder from '@/pages/public/PublicForm_Mitglieder';
 // <public:imports>
 // </public:imports>
 // <custom:imports>
+const VeranstaltungDurchfuehrenPage = lazy(() => import('@/pages/intents/VeranstaltungDurchfuehrenPage'));
+const JahresbeitragEinziehenPage = lazy(() => import('@/pages/intents/JahresbeitragEinziehenPage'));
 // </custom:imports>
 
 export default function App() {
@@ -49,6 +51,8 @@ export default function App() {
                 <Route path="mitglieder/:id" element={<MitgliederDetailPage />} />
                 <Route path="admin" element={<AdminPage />} />
                 {/* <custom:routes> */}
+                <Route path="intents/veranstaltung-durchfuehren" element={<Suspense fallback={null}><VeranstaltungDurchfuehrenPage /></Suspense>} />
+                <Route path="intents/jahresbeitrag-einziehen" element={<Suspense fallback={null}><JahresbeitragEinziehenPage /></Suspense>} />
                 {/* </custom:routes> */}
               </Route>
             </Routes>
