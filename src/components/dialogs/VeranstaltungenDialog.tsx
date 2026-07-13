@@ -70,6 +70,12 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
       return true;
     }
   }, [fields, normalizedDefaults]);
+  const [showErrors, setShowErrors] = useState(false);
+  const REQUIRED_FIELDS = ['titel', 'datum_uhrzeit', 'veranstaltungsart'] as const;
+  const missingRequired = REQUIRED_FIELDS.filter(k => {
+    const v = (fields as Record<string, unknown>)[k];
+    return v == null || v === '' || (Array.isArray(v) && v.length === 0);
+  });
   const [aiOpen, setAiOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
@@ -151,6 +157,10 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (missingRequired.length > 0) {
+      setShowErrors(true);
+      return;
+    }
     setSaving(true);
     setSubmitError(null);
     try {
@@ -276,13 +286,17 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
   const fieldBlocks: Record<string, React.ReactNode> = {
     'titel': (
       <div key="titel" className="space-y-1.5">
-        <Label htmlFor="titel">Titel der Veranstaltung</Label>
+        <Label htmlFor="titel">Titel der Veranstaltung <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="titel"
-          placeholder="z. B. Vortrag AI-Grundlagen"
+          placeholder=""
           value={fields.titel ?? ''}
           onChange={e => setFields(f => ({ ...f, titel: e.target.value }))}
+          required
         />
+        {showErrors && !fields.titel && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'beschreibung': (
@@ -290,7 +304,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="beschreibung">Beschreibung</Label>
         <Textarea
           id="beschreibung"
-          placeholder="Inhalt, Dauer, Voraussetzungen..."
+          placeholder=""
           value={fields.beschreibung ?? ''}
           onChange={e => setFields(f => ({ ...f, beschreibung: e.target.value }))}
           rows={3}
@@ -299,14 +313,18 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
     ),
     'datum_uhrzeit': (
       <div key="datum_uhrzeit" className="space-y-1.5">
-        <Label htmlFor="datum_uhrzeit">Datum & Uhrzeit</Label>
+        <Label htmlFor="datum_uhrzeit">Datum & Uhrzeit <span className="text-destructive" aria-hidden="true">*</span></Label>
         <DatePicker
           id="datum_uhrzeit"
-          placeholder="Wann startet die Veranstaltung?"
+          placeholder=""
           mode="datetime"
           value={fields.datum_uhrzeit ?? null}
           onChange={v => setFields(f => ({ ...f, datum_uhrzeit: v ?? undefined }))}
+          required
         />
+        {showErrors && !fields.datum_uhrzeit && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'anmeldeschluss': (
@@ -314,7 +332,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="anmeldeschluss">Anmeldeschluss</Label>
         <DatePicker
           id="anmeldeschluss"
-          placeholder="Letzter Tag zur Anmeldung?"
+          placeholder=""
           mode="date"
           value={fields.anmeldeschluss ?? null}
           onChange={v => setFields(f => ({ ...f, anmeldeschluss: v ?? undefined }))}
@@ -323,7 +341,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
     ),
     'veranstaltungsart': (
       <div key="veranstaltungsart" className="space-y-1.5">
-        <Label htmlFor="veranstaltungsart">Veranstaltungsart</Label>
+        <Label htmlFor="veranstaltungsart">Veranstaltungsart <span className="text-destructive" aria-hidden="true">*</span></Label>
         <div role="radiogroup" className="flex flex-wrap gap-1.5">
           <button
             type="button"
@@ -391,6 +409,9 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
             Sonstiges
           </button>
         </div>
+        {showErrors && !fields.veranstaltungsart && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'veranstaltungsort': (
@@ -398,7 +419,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="veranstaltungsort">Veranstaltungsort</Label>
         <Input
           id="veranstaltungsort"
-          placeholder="z. B. Raum 101 oder Online"
+          placeholder=""
           value={fields.veranstaltungsort ?? ''}
           onChange={e => setFields(f => ({ ...f, veranstaltungsort: e.target.value }))}
         />
@@ -412,7 +433,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
           type="number"
           step="any"
           {...numberInputProps(formEnhancements, 'max_teilnehmer')}
-          placeholder="z. B. 30"
+          placeholder=""
           value={fields.max_teilnehmer !== undefined ? fields.max_teilnehmer : (computedValues['max_teilnehmer'] ?? '')}
           onChange={e => setFields(f => ({ ...f, max_teilnehmer: clampNumberValue(formEnhancements, 'max_teilnehmer', e.target.value) }))}
         />
@@ -423,7 +444,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="verantwortlicher">Verantwortliche Person</Label>
         <Input
           id="verantwortlicher"
-          placeholder="Name der Kontaktperson"
+          placeholder=""
           value={fields.verantwortlicher ?? ''}
           onChange={e => setFields(f => ({ ...f, verantwortlicher: e.target.value }))}
         />
@@ -434,7 +455,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="bemerkungen_veranstaltung">Bemerkungen</Label>
         <Textarea
           id="bemerkungen_veranstaltung"
-          placeholder="Besonderheiten, Material, Links..."
+          placeholder=""
           value={fields.bemerkungen_veranstaltung ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_veranstaltung: e.target.value }))}
           rows={3}
@@ -795,6 +816,12 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
                 })()}
               </div>
             )}
+            {showErrors && missingRequired.length > 0 && (
+              <p className="text-xs text-destructive flex items-center gap-1.5" role="alert">
+                <IconAlertCircle className="h-3.5 w-3.5 shrink-0" />
+                Bitte fülle die markierten Pflichtfelder aus.
+              </p>
+            )}
             {recordId && (
               <div className="pt-2 border-t border-border">
                 <AttachmentsSection appId={APP_IDS.VERANSTALTUNGEN} recordId={recordId} />
@@ -812,7 +839,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
             <Button
               type="submit"
               className="max-sm:h-12 max-sm:flex-1 max-sm:text-base"
-              disabled={saving || !isDirty}
+              disabled={saving || !isDirty || (showErrors && missingRequired.length > 0)}
             >
               {saving ? 'Speichern...' : defaultValues ? 'Speichern' : 'Erstellen'}
             </Button>

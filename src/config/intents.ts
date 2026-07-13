@@ -14,8 +14,9 @@
  *   // </custom:intent-imports>
  *   …
  *   // <custom:intents>
- *   { path: '/intents/neue-buchung', label: 'Neue Buchung', icon: IconCalendarPlus, description: 'Buchung in 3 Schritten anlegen' },
- *   // </custom:intents>
+  { path: '/intents/veranstaltung-durchfuehren', label: 'Veranstaltung', icon: IconCalendarEvent, description: 'Anmeldungen und Anwesenheit verwalten' },
+  { path: '/intents/jahresbeitrag-einziehen', label: 'Jahresbeitrag', icon: IconCoin, description: 'Beitragszahlungen für alle Mitglieder erfassen' },
+  // </custom:intents>
  */
 import type { ComponentType } from 'react';
 

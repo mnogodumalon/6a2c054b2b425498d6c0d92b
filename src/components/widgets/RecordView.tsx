@@ -92,7 +92,7 @@
  * @version 1.0.0
  * @since 2026-06-03
  */
-import { type ReactNode, type ComponentType, useEffect, useState, useCallback } from 'react';
+import { type ReactNode, type ComponentType, useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { IconArrowLeft, IconPencil, IconX, IconAlertCircle, IconRefresh, IconFileOff, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
@@ -305,7 +305,10 @@ export function RecordSection({ title, icon: Icon, cols = 1, className, children
   );
 }
 
-type RecordFieldFormat = 'text' | 'longtext' | 'date' | 'datetime' | 'currency' | 'bool' | 'email' | 'url' | 'pill';
+// Exported as the SINGLE source of truth for the shared 9-value format
+// vocabulary — TableWidget imports this type and extends it (TableCellFormat).
+// Keep these literals in sync only HERE.
+export type RecordFieldFormat = 'text' | 'longtext' | 'date' | 'datetime' | 'currency' | 'bool' | 'email' | 'url' | 'pill';
 
 type RecordFieldProps = {
   label: ReactNode;
@@ -503,6 +506,12 @@ type RecordOverlayProps = {
    * loses the user's preview context. Stay in the overlay.
    */
   onBack?: () => void;
+  /**
+   * Changes → the body scroll resets to top. The Host passes the stack DEPTH
+   * so a drill/back lands at the top of the new record (the shell itself
+   * stays mounted — no backdrop re-fade, no re-slide).
+   */
+  scrollKey?: string | number;
   editLabel?: string;
   closeLabel?: string;
   backLabel?: string;
@@ -642,12 +651,20 @@ export function RecordOverlay({
   prevLabel = 'Vorheriges',
   nextLabel = 'Nächstes',
   className,
+  scrollKey,
   children,
 }: RecordOverlayProps) {
   const requestClose = useCallback(() => {
     if (onBeforeClose && onBeforeClose() === false) return;
     onClose();
   }, [onBeforeClose, onClose]);
+
+  // Scroll-reset on stack navigation: the Host keeps ONE shell mounted while
+  // the body swaps — without this, the next record opens mid-scroll.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, [scrollKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -753,7 +770,7 @@ export function RecordOverlay({
           )}
           <div className={`flex flex-col min-h-0 overflow-hidden ${contentColumn}`}>
             {header}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div ref={bodyRef} className="flex-1 overflow-y-auto p-6">
               <div className="flex flex-col gap-6">
                 {children}
               </div>
@@ -786,7 +803,7 @@ export function RecordOverlay({
             {media}
           </div>
         )}
-        <div className="flex-1 overflow-y-auto p-6 md:p-8">
+        <div ref={bodyRef} className="flex-1 overflow-y-auto p-6 md:p-8">
           <div className="flex flex-col gap-6">
             {children}
           </div>
@@ -903,4 +920,45 @@ export function useRecordOverlayStack<T = RecordOverlayStackItem>(
     close,
     replace,
   };
+}
+
+export interface RecordOverlayHostProps<T> {
+  /** Der Stack aus useRecordOverlayStack — der Host rendert dessen `top`. */
+  overlay: RecordOverlayStack<T>;
+  /** Body für den obersten Eintrag — die EINE semantische Verzweigung (switch über top.type). */
+  render: (top: T) => ReactNode;
+  /** Footer (Advance-Aktion) für den obersten Eintrag. */
+  footer?: (top: T) => ReactNode;
+  /** Bearbeiten-Pfad für den obersten Eintrag. */
+  onEdit?: (top: T) => void;
+  placement?: RecordOverlayProps['placement'];
+  size?: RecordOverlayProps['size'];
+  className?: string;
+}
+
+/**
+ * DIE eine Overlay-Shell pro Seite. Rendert den gesamten Stack in EINEM
+ * <RecordOverlay>: bei push/pop bleibt die Shell gemountet und nur der Body
+ * wechselt — Backdrop-Fade und Panel-Slide spielen NUR beim ersten Öffnen
+ * (ein <RecordOverlay> pro Record-TYP mit open-Flags remountet die Shell bei
+ * jedem Drill und blinkt). Back erscheint automatisch ab Stack-Tiefe 2;
+ * der Body-Scroll startet bei jedem Navigationsschritt oben.
+ */
+export function RecordOverlayHost<T>({ overlay, render, footer, onEdit, placement, size, className }: RecordOverlayHostProps<T>) {
+  const top = overlay.top;
+  return (
+    <RecordOverlay
+      open={overlay.open && top != null}
+      onClose={overlay.close}
+      onBack={overlay.canGoBack ? overlay.pop : undefined}
+      onEdit={top != null && onEdit ? () => onEdit(top) : undefined}
+      footer={top != null ? footer?.(top) : undefined}
+      scrollKey={overlay.stack.length}
+      placement={placement}
+      size={size}
+      className={className}
+    >
+      {top != null ? render(top) : null}
+    </RecordOverlay>
+  );
 }

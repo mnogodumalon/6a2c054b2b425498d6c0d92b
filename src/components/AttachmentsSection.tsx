@@ -104,6 +104,7 @@ function AddAttachmentDialog({ open, onClose, onCreated, appId, recordId }: AddD
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -122,6 +123,7 @@ function AddAttachmentDialog({ open, onClose, onCreated, appId, recordId }: AddD
 
   async function uploadAndAttach(file: File) {
     setUploading(true);
+    setUploadError(null);
     try {
       const url = await uploadFile(file, file.name);
       await createRecordAttachment(appId, recordId, {
@@ -131,6 +133,8 @@ function AddAttachmentDialog({ open, onClose, onCreated, appId, recordId }: AddD
       });
       onCreated();
       onClose();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Datei konnte nicht hochgeladen werden.');
     } finally {
       setUploading(false);
     }
@@ -223,6 +227,10 @@ function AddAttachmentDialog({ open, onClose, onCreated, appId, recordId }: AddD
               }}
             />
           </div>
+
+          {uploadError && (
+            <p className="text-sm text-destructive text-center px-3" role="alert">{uploadError}</p>
+          )}
 
           {/* Divider */}
           <div className="flex items-center gap-3">

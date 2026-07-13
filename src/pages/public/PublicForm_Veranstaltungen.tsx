@@ -125,12 +125,13 @@ export default function PublicFormVeranstaltungen() {
 
         <form onSubmit={handleSubmit} className="space-y-5 bg-card rounded-xl border border-border p-6 shadow-md">
           <div className="space-y-2">
-            <Label htmlFor="titel">Titel der Veranstaltung</Label>
+            <Label htmlFor="titel">Titel der Veranstaltung *</Label>
             <Input
               id="titel"
               placeholder=""
               value={fields.titel ?? ''}
               onChange={e => setFields(f => ({ ...f, titel: e.target.value }))}
+              required
             />
           </div>
           <div className="space-y-2">
@@ -144,13 +145,14 @@ export default function PublicFormVeranstaltungen() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="datum_uhrzeit">Datum & Uhrzeit</Label>
+            <Label htmlFor="datum_uhrzeit">Datum & Uhrzeit *</Label>
             <DatePicker
               id="datum_uhrzeit"
               placeholder=""
               mode="datetime"
               value={fields.datum_uhrzeit ?? null}
               onChange={v => setFields(f => ({ ...f, datum_uhrzeit: v ?? undefined }))}
+              required
             />
           </div>
           <div className="space-y-2">
@@ -164,7 +166,7 @@ export default function PublicFormVeranstaltungen() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="veranstaltungsart">Veranstaltungsart</Label>
+            <Label htmlFor="veranstaltungsart">Veranstaltungsart *</Label>
             <div role="radiogroup" className="flex flex-wrap gap-1.5">
               <button
                 type="button"

@@ -1,3 +1,5 @@
+import { ensureUploadableImage } from "@/lib/ai";
+
 const AGENT_ENDPOINT = "https://my.living-apps.de/actions-agent";
 const APPGROUP_ID = "6a2c054b2b425498d6c0d92b";
 
@@ -98,7 +100,8 @@ export async function executeAction(
     formData.append("action_identifier", actionIdentifier);
     if (inputs) formData.append("inputs", JSON.stringify(inputs));
     if (files) {
-      for (const file of files) formData.append("files", file);
+      // HEIC/HEIF → JPEG before upload (iPhone photos; server 500s on HEIC).
+      for (const file of files) formData.append("files", await ensureUploadableImage(file));
     }
     resp = await fetch(`${AGENT_ENDPOINT}/execute`, {
       method: "POST",

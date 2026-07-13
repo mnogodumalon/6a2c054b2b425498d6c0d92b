@@ -1,3 +1,5 @@
+import { Sentry } from "./sentry";
+
 const AI_ENDPOINT = "https://my.living-apps.de/litellm/v1/chat/completions";
 const AI_MODEL = "default";
 
@@ -94,6 +96,43 @@ function canvasConvertToJpeg(file: File): Promise<File> {
   });
 }
 
+/** Guards for the external HEIC converter. It runs libheif in a blob-URL Web
+ *  Worker; if a CSP or an ad/privacy blocker kills that worker, the underlying
+ *  promise can hang forever (no resolve, no reject) — leaving the user on an
+ *  infinite spinner. A timeout turns that hang into a reportable error. */
+const HEIC_SCRIPT_TIMEOUT_MS = 30000;
+const HEIC_DECODE_TIMEOUT_MS = 30000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+/** Report an image-conversion failure to Sentry with enough context to tell
+ *  browsers/formats apart later (captureException is a safe no-op when Sentry
+ *  has no DSN). Telemetry must never break the conversion path itself. */
+function reportConversionFailure(step: string, file: File, err: unknown): void {
+  try {
+    Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+      tags: { source: "image_conversion", step },
+      contexts: {
+        upload: {
+          fileType: file.type || "(empty)",
+          fileName: file.name,
+          fileSizeKb: Math.round(file.size / 1024),
+        },
+      },
+    });
+  } catch {
+    /* Sentry unavailable */
+  }
+}
+
 let heicToLoaded: Promise<void> | null = null;
 
 function loadHeicTo(): Promise<void> {
@@ -112,14 +151,14 @@ function loadHeicTo(): Promise<void> {
 }
 
 async function heicFallbackConvert(file: File): Promise<File> {
-  await loadHeicTo();
+  await withTimeout(loadHeicTo(), HEIC_SCRIPT_TIMEOUT_MS, "HEIC converter download");
   const HT = (window as any).HeicTo;
   if (!HT) throw new Error("HEIC converter not available");
-  const blob: Blob = await HT({
-    blob: file,
-    type: "image/jpeg",
-    quality: 0.92,
-  });
+  const blob: Blob = await withTimeout(
+    HT({ blob: file, type: "image/jpeg", quality: 0.92 }),
+    HEIC_DECODE_TIMEOUT_MS,
+    "HEIC decode",
+  );
   const name = file.name.replace(/\.[^.]+$/, ".jpg");
   return new File([blob], name, { type: "image/jpeg" });
 }
@@ -128,8 +167,33 @@ async function convertToJpeg(file: File): Promise<File> {
   try {
     return await canvasConvertToJpeg(file);
   } catch {
-    return await heicFallbackConvert(file);
+    // Non-Safari browsers can't decode HEIC natively and fall back to the
+    // external libheif converter. If THAT also fails (blocked script, CSP-killed
+    // worker, timeout), report it with context and surface an actionable message
+    // instead of a silent failure or an infinite spinner.
+    try {
+      return await heicFallbackConvert(file);
+    } catch (err) {
+      reportConversionFailure("heic_fallback", file, err);
+      throw new Error(
+        "Could not convert this photo. HEIC images are supported natively only in " +
+        "Safari — please re-upload it as JPEG (on iPhone: Settings > Camera > Formats " +
+        "> 'Most Compatible') or open this dashboard in Safari.",
+      );
+    }
   }
+}
+
+/** Ensures a file is a server-acceptable image before it hits POST /files.
+ *  The Living-Apps upload endpoint decodes every image server-side and 500s on
+ *  HEIC ("cannot identify image file") — so HEIC/HEIF from an iPhone is
+ *  converted to JPEG in the browser FIRST (same Safari-canvas → libheif path as
+ *  the AI photo scan). Non-image files and already-web-safe images pass through
+ *  untouched. Throws an actionable Error if conversion fails (surface it in the
+ *  upload UI, don't swallow it). */
+export async function ensureUploadableImage(file: File): Promise<File> {
+  if (!needsImageConversion(file)) return file;
+  return convertToJpeg(file);
 }
 
 function readExifFromJpeg(buf: ArrayBuffer): DataView | null {
@@ -369,6 +433,17 @@ export function dataUriToBlob(dataUri: string): Blob {
   return new Blob([arr], { type: mime });
 }
 
+/** Synthesize a filename from a data URI's MIME type. OpenAI requires a
+ *  `filename` on every `file` content part (it derives the extension from it),
+ *  and the Responses API rejects the part outright without one — so a PDF sent
+ *  as `{ file: { file_data } }` alone fails with "Missing required parameter".
+ *  The name is only a hint for the MIME/extension, so a synthetic one is fine. */
+function filenameForDataUri(dataUri: string, base = "document"): string {
+  const mime = dataUri.match(/^data:([^;,]+)/)?.[1] ?? "application/octet-stream";
+  const ext = mime.split("/")[1]?.split("+")[0] ?? "bin";
+  return `${base}.${ext}`;
+}
+
 // --- High-level AI features ---
 
 export async function classify(
@@ -454,7 +529,7 @@ export async function analyzeDocument(fileDataUri: string, prompt: string): Prom
       role: "user",
       content: [
         { type: "text", text: prompt },
-        { type: "file", file: { file_data: fileDataUri } },
+        { type: "file", file: { filename: filenameForDataUri(fileDataUri), file_data: fileDataUri } },
       ],
     },
   ]);
@@ -513,7 +588,7 @@ export async function extractFromInput<T = Record<string, unknown>>(
     userContent.push(
       isImage
         ? { type: "image_url", image_url: { url: dataUri! } }
-        : { type: "file", file: { file_data: dataUri! } }
+        : { type: "file", file: { filename: filenameForDataUri(dataUri!), file_data: dataUri! } }
     );
   }
   return safeJsonCompletion([

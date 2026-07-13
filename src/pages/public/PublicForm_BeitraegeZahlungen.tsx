@@ -125,7 +125,7 @@ export default function PublicFormBeitraegeZahlungen() {
 
         <form onSubmit={handleSubmit} className="space-y-5 bg-card rounded-xl border border-border p-6 shadow-md">
           <div className="space-y-2">
-            <Label htmlFor="beitragsjahr">Beitragsjahr</Label>
+            <Label htmlFor="beitragsjahr">Beitragsjahr *</Label>
             <Input
               id="beitragsjahr"
               type="number"
@@ -137,7 +137,7 @@ export default function PublicFormBeitraegeZahlungen() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="beitragshoehe">Beitragshöhe (€)</Label>
+            <Label htmlFor="beitragshoehe">Beitragshöhe (€) *</Label>
             <Input
               id="beitragshoehe"
               type="number"
@@ -149,7 +149,7 @@ export default function PublicFormBeitraegeZahlungen() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="zahlungsart">Zahlungsart</Label>
+            <Label htmlFor="zahlungsart">Zahlungsart *</Label>
             <div role="radiogroup" className="flex flex-wrap gap-1.5">
               <button
                 type="button"
@@ -203,7 +203,7 @@ export default function PublicFormBeitraegeZahlungen() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="zahlungsstatus">Zahlungsstatus</Label>
+            <Label htmlFor="zahlungsstatus">Zahlungsstatus *</Label>
             <div role="radiogroup" className="flex flex-wrap gap-1.5">
               <button
                 type="button"

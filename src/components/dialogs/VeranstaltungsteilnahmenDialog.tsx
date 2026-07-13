@@ -107,6 +107,12 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
     setCreateVeranstaltungenInitial(q);
     setCreateVeranstaltungenOpen(true);
   }
+  const [showErrors, setShowErrors] = useState(false);
+  const REQUIRED_FIELDS = ['mitglied', 'veranstaltung'] as const;
+  const missingRequired = REQUIRED_FIELDS.filter(k => {
+    const v = (fields as Record<string, unknown>)[k];
+    return v == null || v === '' || (Array.isArray(v) && v.length === 0);
+  });
   const [aiOpen, setAiOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
@@ -190,6 +196,10 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (missingRequired.length > 0) {
+      setShowErrors(true);
+      return;
+    }
     setSaving(true);
     setSubmitError(null);
     try {
@@ -329,10 +339,10 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
   const fieldBlocks: Record<string, React.ReactNode> = {
     'mitglied': (
       <div key="mitglied" className="space-y-1.5">
-        <Label htmlFor="mitglied">Mitglied</Label>
+        <Label htmlFor="mitglied">Mitglied <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Combobox
           id="mitglied"
-          placeholder="Welches Mitglied kommt?"
+          placeholder=""
           items={mitgliederListAll.map(r => ({
             id: r.record_id,
             label: String(r.fields.vorname ?? r.record_id),
@@ -344,14 +354,17 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
           onCreateNew={(q) => openCreateMitglieder("mitglied", q)}
           createLabel="Neu in Mitglieder"
         />
+        {showErrors && !fields.mitglied && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'veranstaltung': (
       <div key="veranstaltung" className="space-y-1.5">
-        <Label htmlFor="veranstaltung">Veranstaltung</Label>
+        <Label htmlFor="veranstaltung">Veranstaltung <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Combobox
           id="veranstaltung"
-          placeholder="Welche Veranstaltung?"
+          placeholder=""
           items={veranstaltungenListAll.map(r => ({
             id: r.record_id,
             label: String(r.fields.titel ?? r.record_id),
@@ -363,6 +376,9 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
           onCreateNew={(q) => openCreateVeranstaltungen("veranstaltung", q)}
           createLabel="Neu in Veranstaltungen"
         />
+        {showErrors && !fields.veranstaltung && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'anmeldedatum': (
@@ -370,7 +386,7 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
         <Label htmlFor="anmeldedatum">Anmeldedatum</Label>
         <DatePicker
           id="anmeldedatum"
-          placeholder="Heute oder manuell?"
+          placeholder=""
           mode="date"
           value={fields.anmeldedatum ?? null}
           onChange={v => setFields(f => ({ ...f, anmeldedatum: v ?? undefined }))}
@@ -395,7 +411,7 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
         <Label htmlFor="bemerkungen_teilnahme">Bemerkungen</Label>
         <Textarea
           id="bemerkungen_teilnahme"
-          placeholder="Feedback, Besonderheiten..."
+          placeholder=""
           value={fields.bemerkungen_teilnahme ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_teilnahme: e.target.value }))}
           rows={3}
@@ -756,6 +772,12 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
                 })()}
               </div>
             )}
+            {showErrors && missingRequired.length > 0 && (
+              <p className="text-xs text-destructive flex items-center gap-1.5" role="alert">
+                <IconAlertCircle className="h-3.5 w-3.5 shrink-0" />
+                Bitte fülle die markierten Pflichtfelder aus.
+              </p>
+            )}
             {recordId && (
               <div className="pt-2 border-t border-border">
                 <AttachmentsSection appId={APP_IDS.VERANSTALTUNGSTEILNAHMEN} recordId={recordId} />
@@ -773,7 +795,7 @@ export function VeranstaltungsteilnahmenDialog({ open, onClose, onSubmit, defaul
             <Button
               type="submit"
               className="max-sm:h-12 max-sm:flex-1 max-sm:text-base"
-              disabled={saving || !isDirty}
+              disabled={saving || !isDirty || (showErrors && missingRequired.length > 0)}
             >
               {saving ? 'Speichern...' : defaultValues ? 'Speichern' : 'Erstellen'}
             </Button>

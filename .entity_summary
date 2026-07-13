@@ -1,7 +1,0 @@
-- Beiträge & Zahlungen (beitraege_zahlungen): mitglied[applookup/select], beitragsjahr[number], beitragshoehe[number], zahlungsart[lookup/select], zahlungsdatum[date/date], zahlungsstatus[lookup/select], bemerkungen_zahlung[string/textarea]
-  → mitglied links to app_id 6a2c051add06b14dff7ae846
-- Veranstaltungen (veranstaltungen): titel[string/text], beschreibung[string/textarea], datum_uhrzeit[date/datetimeminute], anmeldeschluss[date/date], veranstaltungsart[lookup/select], veranstaltungsort[string/text], max_teilnehmer[number], verantwortlicher[string/text], bemerkungen_veranstaltung[string/textarea]
-- Veranstaltungsteilnahmen (veranstaltungsteilnahmen): mitglied[applookup/select], veranstaltung[applookup/select], anmeldedatum[date/date], anwesenheit[bool], bemerkungen_teilnahme[string/textarea]
-  → mitglied links to app_id 6a2c051add06b14dff7ae846
-  → veranstaltung links to app_id 6a2c05219a64afeec0949857
-- Mitglieder (mitglieder): geburtsdatum[date/date], email[string/email], telefon[string/tel], strasse[string/text], hausnummer[string/text], plz[string/text], ort[string/text], mitgliedsnummer[string/text], eintrittsdatum[date/date], mitgliedsstatus[lookup/select], iban[string/text], bemerkungen[string/textarea], vorname[string/text], nachname[string/text]

@@ -10,7 +10,15 @@
  * board orders resource × time, a kanban orders a CATEGORY axis, a map orders a
  * GEO axis (latitude × longitude). Compose; never reimplement.
  *
- * @version 1.5.1
+ * @version 1.6.0
+ * @since 2026-07-10  (1.6.0: Leaflet + markercluster kommen GEBÜNDELT aus
+ *                     node_modules (dynamic import → Lazy-Chunk nur für
+ *                     Karten-Seiten, Vite-dedupliziert mit GeoMapPicker) —
+ *                     der Runtime-Load vom my.living-apps.de/npm-Proxy
+ *                     entfällt: eine Herkunft, deterministische Versionen
+ *                     (im E2B-Template gepinnt), echte @types/leaflet im
+ *                     Sandbox-tsc. Die schmale typed Facade bleibt die
+ *                     API-Wahrheit des Widgets.
  * @since 2026-06-30  (1.5.1: + Waze in the popup Route links — popular,
  *                     traffic-aware driving nav that deep-links its app on a
  *                     phone. Just another MAP_NAV_PROVIDERS entry; the footer now
@@ -275,14 +283,12 @@ export type MapLegendItem = {
 // — a future call to an unlisted member is a compile error (add it explicitly),
 // not a silent slide onto `any`. This is what makes the typed contract real.
 
-const LEAFLET_CSS = 'https://my.living-apps.de/npm/leaflet@1.9.4/dist/leaflet.css';
-const LEAFLET_JS = 'https://my.living-apps.de/npm/leaflet@1.9.4/dist/leaflet.js';
-// leaflet.markercluster (same CDN mirror, no npm/E2B change). Only MarkerCluster.css
-// is loaded — NOT MarkerCluster.Default.css: its coloured-circle defaults would
-// fight our own dashboard-styled cluster icon (className '' → the defaults can't
-// hit it). This css carries the spiderfy/animation geometry only.
-const CLUSTER_JS = 'https://my.living-apps.de/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js';
-const CLUSTER_CSS = 'https://my.living-apps.de/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css';
+// Leaflet + markercluster kommen GEBÜNDELT aus node_modules (im E2B-Template
+// installiert, Versionen dort gepinnt): dynamic import → eigener Lazy-Chunk,
+// der nur lädt, wenn eine Karte mountet. Kein Runtime-Load von
+// my.living-apps.de/npm mehr — eine Herkunft (S3), deterministisch, offline-fest.
+// Nur MarkerCluster.css wird importiert — NICHT MarkerCluster.Default.css: its
+// coloured-circle defaults would fight our own dashboard-styled cluster icon.
 // Above this many distinct points the map auto-clusters (honest plotting becomes
 // clutter past it). Below → every pin shown, exactly as before. `cluster` overrides.
 const CLUSTER_AUTO_THRESHOLD = 100;
@@ -345,80 +351,39 @@ interface LeafletStatic {
     chunkedLoading?: boolean;
   }): LeafletMarkerLayer;
 }
-declare const L: LeafletStatic;
+// Ambient-Deklarationen für Plugin + CSS-Importe liegen in
+// src/types/leaflet-plugins.d.ts (mit-generiert) — ein untypisiertes Modul
+// kann nicht aus einer Modul-Datei heraus deklariert werden (TS2665).
+let L: LeafletStatic;  // gesetzt von loadLeaflet(); vor 'ready' greift kein Codepfad zu
 
-/** Inject a stylesheet <link> once (idempotent by href). */
-function ensureCss(href: string): void {
-  if (!document.querySelector(`link[href="${href}"]`)) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
+let leafletPromise: Promise<void> | null = null;
+
+/** Leaflet-Core (FATAL bei Fehler → MapError; Promise-Reset erlaubt Retry) und
+ *  danach das markercluster-Plugin (NON-fatal: ohne Plugin plotten alle Pins
+ *  ungeclustert — Clustering ist Enhancement, keine Voraussetzung). Der Import
+ *  ist Vite-dedupliziert: GeoMapPicker und weitere Karten teilen denselben
+ *  Chunk und dasselbe Modul-Objekt — das alte DOM-Polling entfällt. */
+function loadLeaflet(): Promise<void> {
+  if (!leafletPromise) {
+    leafletPromise = (async () => {
+      await import('leaflet/dist/leaflet.css');
+      const mod: unknown = await import('leaflet');
+      L = ((mod as { default?: unknown }).default ?? mod) as LeafletStatic;
+      (window as unknown as { L: LeafletStatic }).L = L;  // UMD-Plugins erwarten das Global
+      try {
+        await import('leaflet.markercluster/dist/MarkerCluster.css');
+        await import('leaflet.markercluster');  // hängt markerClusterGroup an L
+      } catch { /* clustering unavailable; pins plot unclustered */ }
+    })().catch(err => { leafletPromise = null; throw err; });
   }
-}
-
-/** Load Leaflet core once. Copied (not imported) from GeoMapPicker's proven
- *  pattern: a load promise + a double-load guard (typeof L / existing tag).
- *  UNLIKE the picker, the rejection is NOT swallowed — it surfaces as MapError. */
-function loadLeafletCore(): Promise<void> {
-  if (typeof L !== 'undefined') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    ensureCss(LEAFLET_CSS);
-    const existing = document.querySelector(`script[src="${LEAFLET_JS}"]`);
-    if (existing) {
-      // A sibling widget already started the load — wait for the global.
-      let waited = 0;
-      const check = setInterval(() => {
-        if (typeof L !== 'undefined') { clearInterval(check); resolve(); }
-        else if ((waited += 50) > 10000) { clearInterval(check); reject(new Error('Leaflet konnte nicht geladen werden.')); }
-      }, 50);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = LEAFLET_JS;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Leaflet konnte nicht geladen werden.'));
-    document.head.appendChild(script);
-  });
+  return leafletPromise;
 }
 
 /** True once the markercluster plugin has attached `L.markerClusterGroup`. The
  *  cast keeps the probe honest — the facade declares the member as present, but
- *  at runtime it only exists after the plugin script executes. */
+ *  at runtime it only exists after the plugin module executed. */
 function clusterLoaded(): boolean {
   return typeof L !== 'undefined' && typeof (L as { markerClusterGroup?: unknown }).markerClusterGroup === 'function';
-}
-
-/** Load the markercluster plugin (after core L exists). Same double-load guard
- *  as core. Its rejection is NON-fatal (the caller swallows it): without the
- *  plugin the map still plots every pin, just unclustered — clustering is an
- *  enhancement, not a precondition for showing the map. */
-function loadClusterPlugin(): Promise<void> {
-  if (clusterLoaded()) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    ensureCss(CLUSTER_CSS);
-    const existing = document.querySelector(`script[src="${CLUSTER_JS}"]`);
-    if (existing) {
-      let waited = 0;
-      const check = setInterval(() => {
-        if (clusterLoaded()) { clearInterval(check); resolve(); }
-        else if ((waited += 50) > 10000) { clearInterval(check); reject(new Error('Marker-Cluster-Erweiterung nicht verfügbar.')); }
-      }, 50);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = CLUSTER_JS;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Marker-Cluster-Erweiterung nicht verfügbar.'));
-    document.head.appendChild(script);
-  });
-}
-
-/** Core (fatal) then the cluster plugin (non-fatal — a plugin failure must not
- *  block the map). When this resolves, status flips to 'ready' and clusterLoaded()
- *  reflects whether aggregation is available. */
-function loadLeaflet(): Promise<void> {
-  return loadLeafletCore().then(() => loadClusterPlugin().catch(() => { /* clustering unavailable; pins plot unclustered */ }));
 }
 
 // ── Tone pin (L.divIcon HTML string — no React in Leaflet's DOM) ────────────

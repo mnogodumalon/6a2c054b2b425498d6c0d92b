@@ -95,6 +95,150 @@ if (src.includes('<DashboardGrid') && !/aside\s*=/.test(src)) {
   warnings.push('DashboardGrid without aside — fine ONLY when the app truly has no secondary slice; otherwise add a WorkList on a different axis than the primary widget.');
 }
 
+// 10. rail is deprecated — the side column grows with the SUM of its surfaces
+if (/variant\s*=\s*["'{]+rail/.test(src)) {
+  warnings.push('variant="rail" is deprecated — compose variant="wide" with a slim <StatStrip> above the primary surface instead (the rail column outgrows the board with real data).');
+}
+
+// 11. the 2×2 card grid is legacy — StatStrip is the compact KPI presentation
+if (/layout\s*=\s*["'{]+grid/.test(src)) {
+  warnings.push('<StatCardRow layout="grid"> is legacy — use <StatStrip><StatStripItem …/></StatStrip> (slim segmented bar) when the cards row is too heavy for the page.');
+}
+
+// 12. DashboardGrid owns the entrance — an ENTRANCE wrapper inside a slot
+// collapses the aside band into one column and glues the surfaces together
+if (/(?:hero|kpis|aside|primary)=\{\s*(?:\n\s*)?<div[^>]*(?:ENTRANCE|entranceDelay)/.test(src)) {
+  errors.push('ENTRANCE/entranceDelay wrapper inside a DashboardGrid slot — the grid owns the staggered entrance. Pass slot content bare (aside surfaces as fragment siblings: <><WorkList …/><WorkList …/></>); the wrapper div collapses the band into one column with no gap.');
+}
+
+// 12b. Unguarded .localeCompare on record fields — same crash family as the
+// parseISO trap: one record without the value ("Cannot read properties of
+// undefined") takes the whole page down. A live fleet build crashed exactly
+// here, sorting a 'zuletzt hinzugefügt' band on a bare `createdat`.
+for (let i = 0; i < dashLines.length; i++) {
+  const line = dashLines[i];
+  if (!/[\w$]\.(?:[\w$]+)\.localeCompare\(/.test(line)) continue;
+  if (/String\(|\?\.|\?\?|&&|\|\|/.test(line)) continue;
+  errors.push(`Line ${i + 1}: unguarded .localeCompare on a possibly-empty field — one record without the value crashes the page. Sort with (a.f ?? '').localeCompare(b.f ?? '') or wrap both sides in String(...).`);
+}
+
+// 13. The page header comes FIRST — greeting h1 above the grid, always.
+// (A live build shipped KPIs as the first visible element and no greeting at all.)
+const gridIdx = src.indexOf('<DashboardGrid');
+if (gridIdx >= 0) {
+  const h1Idx = src.indexOf('<h1');
+  if (h1Idx === -1 || h1Idx > gridIdx) {
+    errors.push('No <h1> page header before <DashboardGrid> — EVERY dashboard starts with the greeting h1 (gruss()), context line and primary action ABOVE the grid; KPIs are never the first element.');
+  }
+}
+
+// 14. Widgets bring their own card chrome — wrapping one in your own rounded
+// card (+ glued <h2>) inside `primary` is double chrome and makes the same
+// widget look different across dashboards.
+{
+  const widgetTag = /<(TableWidget|CalendarWidget|KanbanWidget|ResourceTimeline|MapWidget)\b/;
+  let from = 0;
+  while (true) {
+    const p = src.indexOf('primary={', from);
+    if (p === -1) break;
+    const windowSrc = src.slice(p, p + 800);
+    const m = windowSrc.match(widgetTag);
+    if (m && windowSrc.slice(0, m.index).includes('rounded-[27px]')) {
+      errors.push(`primary slot wraps <${m[1]}> in an own rounded card — widgets bring their card chrome themselves; remove the wrapper (and its glued heading), pass the widget bare.`);
+    }
+    from = p + 9;
+  }
+}
+
+// 15. pagination is a reliability DEFAULT (auto above 10 rows) — tune it only
+// on explicit user request, or every dashboard paginates differently.
+if (/pagination\s*=\s*\{\{/.test(src)) {
+  warnings.push('pagination={{ pageSize }} set — the automatic default (10) is the product standard; set a custom pageSize ONLY when the user explicitly asked for it.');
+}
+
+// 16. One-axis heuristic for charts: the SAME record field driving a clickable
+// KPI (StatCard/StatStripItem with onClick) AND a ChartWidget dimension on one
+// page is the decorated mirror — the chart's tone carries that state.
+{
+  const dimFields = new Set();
+  const dimRe = /dimension=\{\{[\s\S]{0,300}?\}\}/g;
+  let dm;
+  while ((dm = dimRe.exec(src)) !== null) {
+    for (const f of dm[0].matchAll(/fields\.(\w+)/g)) dimFields.add(f[1]);
+  }
+  if (dimFields.size) {
+    const kpiRe = /<Stat(?:Card|StripItem)[\s\S]{0,500}?\/>/g;
+    let km;
+    while ((km = kpiRe.exec(src)) !== null) {
+      if (!km[0].includes('onClick')) continue;
+      for (const f of km[0].matchAll(/fields\.(\w+)/g)) {
+        if (dimFields.has(f[1])) {
+          warnings.push(`Field '${f[1]}' drives BOTH a clickable KPI and a ChartWidget dimension — the KPI is the decorated mirror of a chart segment; drop the KPI (the chart is that axis's control (drill/filter) or its tone carries that state).`);
+        }
+      }
+    }
+  }
+}
+
+// 17. A filter-mode chart + a filterable table column on the SAME field is
+// two controls on one axis — when the chart filters, the facet must GO
+// (SANDBOX_PROMPT: one axis, one control).
+{
+  const filterDimFields = new Set();
+  let fm = 0;
+  while (true) {
+    const p = src.indexOf("mode: 'filter'", fm);
+    if (p === -1) break;
+    // the dimension usually precedes the interaction prop inside the same
+    // <ChartWidget> — scan a window around the mode marker
+    const windowSrc = src.slice(Math.max(0, p - 1200), p + 400);
+    const dm = windowSrc.match(/dimension=\{\{[\s\S]{0,300}?\}\}/);
+    if (dm) for (const f of dm[0].matchAll(/fields\.(\w+)/g)) filterDimFields.add(f[1]);
+    fm = p + 14;
+  }
+  if (filterDimFields.size) {
+    const colRe = /\{[^{}]*filterable\s*:\s*true[^{}]*\}/g;
+    let cm;
+    while ((cm = colRe.exec(src)) !== null) {
+      for (const f of cm[0].matchAll(/fields\.(\w+)/g)) {
+        if (filterDimFields.has(f[1])) {
+          warnings.push(`Field '${f[1]}' has BOTH a filter-mode ChartWidget and a filterable table column — two controls on one axis; the chart IS the control, remove 'filterable' from that column (or drop the chart's filter mode).`);
+        }
+      }
+    }
+  }
+}
+
+// 18. Every RecordOverlay body IS the generated {Entity}Details block — a
+// hand-built field list silently loses fields and renders relations as dead
+// text (live finding: customer shown by name, phone unreachable; photo doc
+// present but no path to the image).
+{
+  let from = 0;
+  let overlays = 0, withDetails = 0;
+  while (true) {
+    const p = src.indexOf('<RecordOverlay', from);
+    if (p === -1) break;
+    overlays++;
+    const windowSrc = src.slice(p, p + 2500);
+    if (/<\w+Details\b/.test(windowSrc)) withDetails++;
+    from = p + 14;
+  }
+  if (overlays > 0 && withDetails < overlays && !src.includes('details-opt-out:')) {
+    errors.push(`${overlays - withDetails} of ${overlays} <RecordOverlay> bodies do NOT render the generated <{Entity}Details> block — compose it (record + lists from useDashboardData + onOpenX/onAddX via overlay.push) instead of hand-building fields; a genuinely different body needs a // details-opt-out: <reason> comment.`);
+  }
+}
+
+// 19. ONE overlay shell per page. A <RecordOverlay> per record type (open-flag
+// shells) unmounts/remounts backdrop+panel on every drill/back and replays the
+// entrance animation — the blink. The Host keeps one shell mounted.
+{
+  const shells = (src.match(/<RecordOverlay\b/g) || []).length;   // \b excludes RecordOverlayHost
+  if (shells >= 2) {
+    errors.push(`${shells} <RecordOverlay> shells found — render the WHOLE stack through ONE <RecordOverlayHost overlay={overlay} render={top => switch(top.type){…}}/>; per-type shells replay the entrance animation on every drill (the blink).`);
+  }
+}
+
 for (const w of warnings) console.log(`WARN: ${w}`);
 if (errors.length > 0) {
   for (const e of errors) console.error(`ERROR: ${e}`);

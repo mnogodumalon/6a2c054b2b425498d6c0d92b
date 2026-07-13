@@ -100,6 +100,12 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
     setCreateMitgliederInitial(q);
     setCreateMitgliederOpen(true);
   }
+  const [showErrors, setShowErrors] = useState(false);
+  const REQUIRED_FIELDS = ['mitglied', 'beitragsjahr', 'beitragshoehe', 'zahlungsart', 'zahlungsstatus'] as const;
+  const missingRequired = REQUIRED_FIELDS.filter(k => {
+    const v = (fields as Record<string, unknown>)[k];
+    return v == null || v === '' || (Array.isArray(v) && v.length === 0);
+  });
   const [aiOpen, setAiOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
@@ -182,6 +188,10 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (missingRequired.length > 0) {
+      setShowErrors(true);
+      return;
+    }
     setSaving(true);
     setSubmitError(null);
     try {
@@ -315,10 +325,10 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
   const fieldBlocks: Record<string, React.ReactNode> = {
     'mitglied': (
       <div key="mitglied" className="space-y-1.5">
-        <Label htmlFor="mitglied">Mitglied</Label>
+        <Label htmlFor="mitglied">Mitglied <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Combobox
           id="mitglied"
-          placeholder="Welches Mitglied?"
+          placeholder=""
           items={mitgliederListAll.map(r => ({
             id: r.record_id,
             label: String(r.fields.vorname ?? r.record_id),
@@ -330,39 +340,48 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
           onCreateNew={(q) => openCreateMitglieder("mitglied", q)}
           createLabel="Neu in Mitglieder"
         />
+        {showErrors && !fields.mitglied && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'beitragsjahr': (
       <div key="beitragsjahr" className="space-y-1.5">
-        <Label htmlFor="beitragsjahr">Beitragsjahr</Label>
+        <Label htmlFor="beitragsjahr">Beitragsjahr <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="beitragsjahr"
           type="number"
           step="any"
           {...numberInputProps(formEnhancements, 'beitragsjahr')}
-          placeholder="z. B. 2026"
+          placeholder=""
           value={fields.beitragsjahr !== undefined ? fields.beitragsjahr : (computedValues['beitragsjahr'] ?? '')}
           onChange={e => setFields(f => ({ ...f, beitragsjahr: clampNumberValue(formEnhancements, 'beitragsjahr', e.target.value) }))}
         />
+        {showErrors && !fields.beitragsjahr && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'beitragshoehe': (
       <div key="beitragshoehe" className="space-y-1.5">
-        <Label htmlFor="beitragshoehe">Beitragshöhe (€)</Label>
+        <Label htmlFor="beitragshoehe">Beitragshöhe (€) <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="beitragshoehe"
           type="number"
           step="any"
           {...numberInputProps(formEnhancements, 'beitragshoehe')}
-          placeholder="z. B. 60,00"
+          placeholder=""
           value={fields.beitragshoehe !== undefined ? fields.beitragshoehe : (computedValues['beitragshoehe'] ?? '')}
           onChange={e => setFields(f => ({ ...f, beitragshoehe: clampNumberValue(formEnhancements, 'beitragshoehe', e.target.value) }))}
         />
+        {showErrors && !fields.beitragshoehe && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'zahlungsart': (
       <div key="zahlungsart" className="space-y-1.5">
-        <Label htmlFor="zahlungsart">Zahlungsart</Label>
+        <Label htmlFor="zahlungsart">Zahlungsart <span className="text-destructive" aria-hidden="true">*</span></Label>
         <div role="radiogroup" className="flex flex-wrap gap-1.5">
           <button
             type="button"
@@ -404,6 +423,9 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
             Barzahlung
           </button>
         </div>
+        {showErrors && !fields.zahlungsart && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'zahlungsdatum': (
@@ -411,7 +433,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Label htmlFor="zahlungsdatum">Zahlungsdatum</Label>
         <DatePicker
           id="zahlungsdatum"
-          placeholder="Wann bezahlt?"
+          placeholder=""
           mode="date"
           value={fields.zahlungsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, zahlungsdatum: v ?? undefined }))}
@@ -420,7 +442,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
     ),
     'zahlungsstatus': (
       <div key="zahlungsstatus" className="space-y-1.5">
-        <Label htmlFor="zahlungsstatus">Zahlungsstatus</Label>
+        <Label htmlFor="zahlungsstatus">Zahlungsstatus <span className="text-destructive" aria-hidden="true">*</span></Label>
         <div role="radiogroup" className="flex flex-wrap gap-1.5">
           <button
             type="button"
@@ -475,6 +497,9 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
             Storniert
           </button>
         </div>
+        {showErrors && !fields.zahlungsstatus && (
+          <p className="text-xs text-destructive mt-1">Pflichtfeld</p>
+        )}
       </div>
     ),
     'bemerkungen_zahlung': (
@@ -482,7 +507,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Label htmlFor="bemerkungen_zahlung">Bemerkungen</Label>
         <Textarea
           id="bemerkungen_zahlung"
-          placeholder="Besonderheiten, Referenzen, Notizen..."
+          placeholder=""
           value={fields.bemerkungen_zahlung ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_zahlung: e.target.value }))}
           rows={3}
@@ -843,6 +868,12 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
                 })()}
               </div>
             )}
+            {showErrors && missingRequired.length > 0 && (
+              <p className="text-xs text-destructive flex items-center gap-1.5" role="alert">
+                <IconAlertCircle className="h-3.5 w-3.5 shrink-0" />
+                Bitte fülle die markierten Pflichtfelder aus.
+              </p>
+            )}
             {recordId && (
               <div className="pt-2 border-t border-border">
                 <AttachmentsSection appId={APP_IDS.BEITRAEGE_ZAHLUNGEN} recordId={recordId} />
@@ -860,7 +891,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
             <Button
               type="submit"
               className="max-sm:h-12 max-sm:flex-1 max-sm:text-base"
-              disabled={saving || !isDirty}
+              disabled={saving || !isDirty || (showErrors && missingRequired.length > 0)}
             >
               {saving ? 'Speichern...' : defaultValues ? 'Speichern' : 'Erstellen'}
             </Button>

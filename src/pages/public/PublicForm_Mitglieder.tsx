@@ -135,7 +135,7 @@ export default function PublicFormMitglieder() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">E-Mail-Adresse</Label>
+            <Label htmlFor="email">E-Mail-Adresse *</Label>
             <Input
               id="email"
               type="email"
@@ -198,17 +198,18 @@ export default function PublicFormMitglieder() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="eintrittsdatum">Eintrittsdatum</Label>
+            <Label htmlFor="eintrittsdatum">Eintrittsdatum *</Label>
             <DatePicker
               id="eintrittsdatum"
               placeholder=""
               mode="date"
               value={fields.eintrittsdatum ?? null}
               onChange={v => setFields(f => ({ ...f, eintrittsdatum: v ?? undefined }))}
+              required
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="mitgliedsstatus">Mitgliedsstatus</Label>
+            <Label htmlFor="mitgliedsstatus">Mitgliedsstatus *</Label>
             <div role="radiogroup" className="flex flex-wrap gap-1.5">
               <button
                 type="button"
@@ -284,21 +285,23 @@ export default function PublicFormMitglieder() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="vorname">Vorname</Label>
+            <Label htmlFor="vorname">Vorname *</Label>
             <Input
               id="vorname"
               placeholder=""
               value={fields.vorname ?? ''}
               onChange={e => setFields(f => ({ ...f, vorname: e.target.value }))}
+              required
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="nachname">Nachname</Label>
+            <Label htmlFor="nachname">Nachname *</Label>
             <Input
               id="nachname"
               placeholder=""
               value={fields.nachname ?? ''}
               onChange={e => setFields(f => ({ ...f, nachname: e.target.value }))}
+              required
             />
           </div>
 
