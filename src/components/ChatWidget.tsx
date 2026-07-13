@@ -380,13 +380,13 @@ export default function ChatWidget() {
     if (!text && !image) return;
 
     const userContent = text || ('Bild analysieren');
-    sendMessage(userContent, image ?? undefined);
+    sendMessage(userContent, image ?? undefined, fileName ?? undefined);
     setInput('');
     setImage(null);
     setFileName(null);
     // Dismiss keyboard on mobile after send
     inputRef.current?.blur();
-  }, [input, image, sendMessage]);
+  }, [input, image, fileName, sendMessage]);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -471,7 +471,9 @@ export default function ChatWidget() {
               <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
                   m.role === 'user'
-                    ? 'bg-primary text-primary-foreground rounded-br-md'
+                    ? m.kind === 'action'
+                      ? 'bg-muted text-muted-foreground border border-border rounded-br-md'
+                      : 'bg-primary text-primary-foreground rounded-br-md'
                     : 'bg-muted text-foreground rounded-bl-md'
                 }`}>
                   {m.image && (() => {

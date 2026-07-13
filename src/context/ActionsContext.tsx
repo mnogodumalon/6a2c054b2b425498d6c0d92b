@@ -17,6 +17,12 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   image?: string;
+  // Original filename of the attached file — the agent stages uploads
+  // under this name instead of a generated upload_NN.ext.
+  imageName?: string;
+  // 'action' = auto-generated invocation notice (Aktion: …), styled as a
+  // neutral system event instead of a primary user bubble.
+  kind?: 'action';
   fixContext?: ExecErrorContext;
 };
 
@@ -27,7 +33,7 @@ interface ActionsContextType {
   messages: Message[];
   chatLoading: boolean;
   runAction: (action: Action) => void;
-  sendMessage: (text: string, image?: string) => void;
+  sendMessage: (text: string, image?: string, imageName?: string) => void;
   fixError: (messageId: string) => void;
   fixingMessageId: string | null;
   runningActionId: string | null;
@@ -160,7 +166,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     const placeholderId = crypto.randomUUID();
     setMessages(prev => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'user', content: `Aktion: ${action.identifier}` },
+      { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}` },
       { id: placeholderId, role: 'assistant', content: 'In Arbeit...' },
     ]);
 
@@ -224,7 +230,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error || '', result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
             ]);
             return;
           }
@@ -327,7 +333,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const sendMessage = useCallback(async (text: string, image?: string) => {
+  const sendMessage = useCallback(async (text: string, image?: string, imageName?: string) => {
     if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
     setChatLoading(true);
@@ -337,6 +343,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       role: 'user',
       content: text,
       image: image ?? undefined,
+      imageName: image ? imageName ?? undefined : undefined,
     };
     const assistantId = crypto.randomUUID();
 
@@ -349,7 +356,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     try {
       const apiMessages = messages
         .concat(userMsg)
-        .map(m => ({ role: m.role, content: m.content, image: m.image }));
+        .map(m => ({ role: m.role, content: m.content, image: m.image, imageName: m.imageName }));
 
       await agentChat(apiMessages, threadId, (delta) => {
         setMessages(prev =>

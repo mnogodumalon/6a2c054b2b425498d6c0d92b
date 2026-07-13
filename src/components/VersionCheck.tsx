@@ -259,11 +259,11 @@ export function VersionCheck() {
         return;
       }
 
-      applyDeployed(verified, latestVersion);
-      await refreshDeployments();
-      setStatus('idle');
+      // Verified — hard reload so the browser actually loads the new bundle.
+      // Updating React state alone keeps the old UI running in memory.
+      window.location.reload();
     } catch { setStatus('error'); }
-  }, [applyDeployed, latestVersion, refreshDeployments]);
+  }, []);
 
   const performRollback = useCallback(async (deployment: Deployment) => {
     setRollbackDialog(null);
@@ -311,12 +311,10 @@ export function VersionCheck() {
         return;
       }
 
-      applyDeployed(verified, latestVersion);
-      await refreshDeployments();
-      setRollbackTarget(null);
-      setStatus('idle');
+      // Verified — hard reload so the browser actually loads the rolled-back bundle.
+      window.location.reload();
     } catch { setStatus('error'); setRollbackTarget(null); }
-  }, [applyDeployed, latestVersion, refreshDeployments]);
+  }, []);
 
   if (status === 'loading') return null;
 

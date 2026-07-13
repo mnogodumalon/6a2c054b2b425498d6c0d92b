@@ -2,6 +2,8 @@ import { ensureUploadableImage } from "@/lib/ai";
 
 const AGENT_ENDPOINT = "https://my.living-apps.de/actions-agent";
 const APPGROUP_ID = "6a2c054b2b425498d6c0d92b";
+// UI language of this generated app — the agent answers in this language.
+const LANG = "de";
 
 export interface InputSchemaProperty {
   type: string;
@@ -216,7 +218,7 @@ async function readAgentStream(
 }
 
 export async function agentChat(
-  messages: Array<{ role: string; content: string; image?: string }>,
+  messages: Array<{ role: string; content: string; image?: string; imageName?: string }>,
   threadId: string,
   onContent: (delta: string) => void,
   onFixResult?: (result: FixResultEvent) => void,
@@ -229,13 +231,15 @@ export async function agentChat(
       name: "klar-agent",
       threadId,
       state: {},
-      properties: { appgroup_id: APPGROUP_ID },
+      properties: { appgroup_id: APPGROUP_ID, lang: LANG },
       messages: messages.map((m) => {
         const parsed = m.image ? parseDataUri(m.image) : null;
         const content = parsed
           ? [
               { type: "text", text: m.content },
-              { type: "binary", mimeType: parsed.mimeType, data: parsed.data },
+              // name: the original filename — the agent stages the upload
+              // under it (JSON.stringify drops the key when undefined).
+              { type: "binary", mimeType: parsed.mimeType, data: parsed.data, name: m.imageName },
             ]
           : m.content;
         return {
@@ -280,6 +284,7 @@ export async function fixAction(
   formData.append("action_identifier", ctx.actionIdentifier);
   formData.append("thread_id", ctx.threadId);
   formData.append("appgroup_id", APPGROUP_ID);
+  formData.append("lang", LANG);
   formData.append("error", ctx.error);
   if (ctx.stdout) formData.append("stdout", ctx.stdout);
   if (ctx.inputs) formData.append("inputs", JSON.stringify(ctx.inputs));
