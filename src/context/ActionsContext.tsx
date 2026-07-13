@@ -230,7 +230,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
             ]);
             return;
           }
