@@ -503,9 +503,9 @@ export default function ChatWidget() {
                     type="button"
                     onClick={() => fixError(m.id)}
                     disabled={chatLoading || !!fixingMessageId}
-                    className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                    className="mt-1.5 inline-flex w-full max-w-[85%] items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
                   >
-                    <IconWand size={14} />
+                    <IconWand size={16} />
                     {fixingMessageId === m.id ? 'Wird behoben…' : 'Automatisch beheben'}
                   </button>
                 )}

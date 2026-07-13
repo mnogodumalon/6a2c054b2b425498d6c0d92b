@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { IconBolt } from '@tabler/icons-react';
 import { useActions } from '@/context/ActionsContext';
 import { ActionsDrawer } from '@/components/ActionsDrawer';
@@ -8,6 +8,14 @@ const LABEL = 'Werkzeuge';
 export function ActionsSidebar() {
   const { actions, filesByAction } = useActions();
   const [open, setOpen] = useState(false);
+
+  // Execution errors surface in the chat (with the auto-fix button) — the
+  // drawer must get out of the way. Fired by ActionsContext.
+  useEffect(() => {
+    const close = () => setOpen(false);
+    window.addEventListener('actions-drawer-close', close);
+    return () => window.removeEventListener('actions-drawer-close', close);
+  }, []);
 
   const unassignedCount = filesByAction['__unassigned__']?.length ?? 0;
   const total = actions.length + (unassignedCount > 0 ? 1 : 0);

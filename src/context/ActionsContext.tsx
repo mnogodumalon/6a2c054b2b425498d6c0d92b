@@ -68,7 +68,7 @@ function execErrorUpdate(
 ): Pick<Message, 'content' | 'fixContext'> {
   const name = action.title || action.identifier;
   return {
-    content: `**Fehler bei der Ausführung von \`${name}\`:**\n\`\`\`\n${errorText}\n\`\`\``,
+    content: `**Etwas klappte nicht bei der Ausführung von \`${name}\`:**\n\`\`\`\n${errorText}\n\`\`\``,
     fixContext: {
       actionName: name,
       actionIdentifier: action.identifier,
@@ -142,6 +142,14 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     void refreshActions();
   }, [refreshActions]);
 
+  // On execution errors the Werkzeug UI must give way to the chat, where the
+  // exception and the auto-fix button live. The drawer owns its own open
+  // state, so it listens for this event (same idiom as 'dashboard-refresh').
+  const focusChatOnError = useCallback(() => {
+    window.dispatchEvent(new Event('actions-drawer-close'));
+    setChatOpen(true);
+  }, []);
+
   const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[]) => {
     if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
@@ -158,6 +166,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
     executeAction(action.app_id, action.identifier, inputs, files)
       .then(result => {
+        if (result.error) focusChatOnError();
         setMessages(prev =>
           prev.map(m => m.id === placeholderId
             ? { ...m, ...(result.error
@@ -167,6 +176,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         );
       })
       .catch(err => {
+        focusChatOnError();
         setMessages(prev =>
           prev.map(m =>
             m.id === placeholderId
@@ -182,7 +192,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         void refreshActions();
         window.dispatchEvent(new Event('dashboard-refresh'));
       });
-  }, [refreshActions]);
+  }, [refreshActions, focusChatOnError]);
 
   const runAction = useCallback((action: Action) => {
     const schema = action.metadata?.input_schema;
@@ -211,9 +221,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
           if (result.error) {
             setRunningActionId(null);
+            focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error || '', result.stdout) },
             ]);
             return;
           }
@@ -231,6 +242,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         })
         .catch(err => {
           setRunningActionId(null);
+          focusChatOnError();
           setMessages(prev => prev.filter(m => m.id !== placeholderId));
           setMessages(prev => [
             ...prev,
@@ -247,7 +259,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     // No preflight: show form immediately
     setInputFormOptions(null);
     setInputFormAction(action);
-  }, [executeAndReport]);
+  }, [executeAndReport, focusChatOnError]);
 
   const submitActionInputs = useCallback((action: Action, inputs: Record<string, unknown>, files: File[]) => {
     setInputFormAction(null);
