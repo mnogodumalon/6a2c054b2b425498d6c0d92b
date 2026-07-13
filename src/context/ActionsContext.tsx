@@ -405,6 +405,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       { id: answerId, role: 'assistant', content: '' },
     ]);
 
+    let answerText = '';
     try {
       const result = await fixAction(
         {
@@ -417,6 +418,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
           files: ctx.files,
         },
         (content) => {
+          answerText += content;
           setMessages(prev =>
             prev.map(m => m.id === answerId ? { ...m, content: m.content + content } : m)
           );
@@ -427,17 +429,25 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         void refreshActions();
         window.dispatchEvent(new Event('dashboard-refresh'));
       } else {
-        setMessages(prev => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: result?.error
-              ? `**Die Aktion schlägt weiterhin fehl:**\n\`\`\`\n${result.error}\n\`\`\``
-              : '*Die Korrektur ist noch nicht bestätigt — deine ursprüngliche Eingabe bleibt erhalten. Beantworte die Frage oben oder versuche es erneut.*',
-            fixContext: ctx,
-          },
-        ]);
+        // The status note goes BEFORE the agent's answer so a clarifying
+        // question stays last and visible; the Auto-Fix button re-arms on
+        // the answer itself (or on the note when the stream stayed empty).
+        const note: Message = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result?.error
+            ? `**Die Aktion schlägt weiterhin fehl:**\n\`\`\`\n${result.error}\n\`\`\``
+            : '*Die Korrektur ist noch nicht bestätigt — deine ursprüngliche Eingabe bleibt erhalten.*',
+          ...(answerText ? {} : { fixContext: ctx }),
+        };
+        setMessages(prev => {
+          const armed = answerText
+            ? prev.map(m => m.id === answerId ? { ...m, fixContext: ctx } : m)
+            : prev;
+          const idx = armed.findIndex(m => m.id === answerId);
+          const at = idx === -1 ? armed.length : idx;
+          return [...armed.slice(0, at), note, ...armed.slice(at)];
+        });
       }
     } catch (err) {
       setMessages(prev => [
