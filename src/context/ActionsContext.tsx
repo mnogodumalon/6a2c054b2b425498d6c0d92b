@@ -1,12 +1,23 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import type { Action, FileAttachment } from '@/lib/actions-agent';
-import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, downloadFile } from '@/lib/actions-agent';
+import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, fixAction, downloadFile } from '@/lib/actions-agent';
+
+export type ExecErrorContext = {
+  actionName: string;
+  actionIdentifier: string;
+  appId: string;
+  errorText: string;
+  stdout?: string;
+  inputs?: Record<string, unknown>;
+  files?: File[];
+};
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   image?: string;
+  fixContext?: ExecErrorContext;
 };
 
 interface ActionsContextType {
@@ -17,6 +28,8 @@ interface ActionsContextType {
   chatLoading: boolean;
   runAction: (action: Action) => void;
   sendMessage: (text: string, image?: string) => void;
+  fixError: (messageId: string) => void;
+  fixingMessageId: string | null;
   runningActionId: string | null;
   devMode: boolean;
   setDevMode: (v: boolean) => void;
@@ -46,6 +59,28 @@ function writeChannelCookie(beta: boolean): void {
   document.cookie = `channel=${value}; path=/; max-age=31536000; SameSite=Lax`;
 }
 
+function execErrorUpdate(
+  action: Action,
+  errorText: string,
+  stdout?: string | null,
+  inputs?: Record<string, unknown>,
+  files?: File[],
+): Pick<Message, 'content' | 'fixContext'> {
+  const name = action.title || action.identifier;
+  return {
+    content: `**Fehler bei der Ausführung von \`${name}\`:**\n\`\`\`\n${errorText}\n\`\`\``,
+    fixContext: {
+      actionName: name,
+      actionIdentifier: action.identifier,
+      appId: action.app_id,
+      errorText,
+      stdout: stdout || undefined,
+      inputs,
+      files,
+    },
+  };
+}
+
 export function useActions() {
   const ctx = useContext(ActionsContext);
   if (!ctx) throw new Error('useActions must be used within ActionsProvider');
@@ -59,7 +94,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [runningActionId, setRunningActionId] = useState<string | null>(null);
-  const [threadId] = useState(() => crypto.randomUUID());
+  const [threadId, setThreadId] = useState(() => crypto.randomUUID());
+  const [fixingMessageId, setFixingMessageId] = useState<string | null>(null);
   const chatLoadingRef = useRef(false);
   const [inputFormAction, setInputFormAction] = useState<Action | null>(null);
   const [inputFormOptions, setInputFormOptions] = useState<
@@ -122,11 +158,12 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
     executeAction(action.app_id, action.identifier, inputs, files)
       .then(result => {
-        const content = result.error
-          ? `Fehler bei der Ausführung:\n${result.error}`
-          : result.stdout || '(no output)';
         setMessages(prev =>
-          prev.map(m => m.id === placeholderId ? { ...m, content } : m)
+          prev.map(m => m.id === placeholderId
+            ? { ...m, ...(result.error
+                ? execErrorUpdate(action, result.error, result.stdout, inputs, files)
+                : { content: result.stdout || '(no output)' }) }
+            : m)
         );
       })
       .catch(err => {
@@ -176,7 +213,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             setRunningActionId(null);
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', content: `Fehler bei der Ausführung:\n${result.error}` },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
             ]);
             return;
           }
@@ -268,6 +305,16 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshActions]);
 
+  const releaseFixContexts = useCallback((appId: string, actionIdentifier: string) => {
+    setMessages(prev =>
+      prev.map(m =>
+        m.fixContext && m.fixContext.appId === appId && m.fixContext.actionIdentifier === actionIdentifier
+          ? { ...m, fixContext: undefined }
+          : m,
+      )
+    );
+  }, []);
+
   const sendMessage = useCallback(async (text: string, image?: string) => {
     if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
@@ -298,6 +345,9 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             m.id === assistantId ? { ...m, content: m.content + delta } : m,
           )
         );
+      }, (fixResult) => {
+        // A fix pending on this thread verified during the chat turn.
+        if (fixResult.success) releaseFixContexts(fixResult.appId, fixResult.action);
       });
     } catch (err) {
       setMessages(prev =>
@@ -313,11 +363,83 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       void refreshActions();
       window.dispatchEvent(new Event('dashboard-refresh'));
     }
-  }, [messages, threadId, refreshActions]);
+  }, [messages, threadId, refreshActions, releaseFixContexts]);
+
+  const fixError = useCallback(async (messageId: string) => {
+    const ctx = messages.find(m => m.id === messageId)?.fixContext;
+    if (!ctx || chatLoadingRef.current) return;
+    chatLoadingRef.current = true;
+    setChatLoading(true);
+    setFixingMessageId(messageId);
+
+    // Fresh thread: the fix conversation replaces the current chat session,
+    // so follow-up questions from the fix agent continue on the same thread.
+    const fixThreadId = crypto.randomUUID();
+    setThreadId(fixThreadId);
+    const answerId = crypto.randomUUID();
+    setMessages([
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `**Korrektur für \`${ctx.actionName}\`** — neue Chat-Sitzung für diese Korrektur gestartet.\n\`\`\`\n${ctx.errorText}\n\`\`\``,
+      },
+      { id: answerId, role: 'assistant', content: '' },
+    ]);
+
+    try {
+      const result = await fixAction(
+        {
+          appId: ctx.appId,
+          actionIdentifier: ctx.actionIdentifier,
+          threadId: fixThreadId,
+          error: ctx.errorText,
+          stdout: ctx.stdout,
+          inputs: ctx.inputs,
+          files: ctx.files,
+        },
+        (content) => {
+          setMessages(prev =>
+            prev.map(m => m.id === answerId ? { ...m, content: m.content + content } : m)
+          );
+        },
+      );
+      if (result?.success) {
+        // The agent's verified replay WAS the execution — nothing to re-run.
+        void refreshActions();
+        window.dispatchEvent(new Event('dashboard-refresh'));
+      } else {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: result?.error
+              ? `**Die Aktion schlägt weiterhin fehl:**\n\`\`\`\n${result.error}\n\`\`\``
+              : '*Die Korrektur ist noch nicht bestätigt — deine ursprüngliche Eingabe bleibt erhalten. Beantworte die Frage oben oder versuche es erneut.*',
+            fixContext: ctx,
+          },
+        ]);
+      }
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `**Korrektur-Anfrage fehlgeschlagen:** ${err instanceof Error ? err.message : String(err)}\n\n*Deine ursprüngliche Eingabe bleibt erhalten — du kannst es erneut versuchen.*`,
+          fixContext: ctx,
+        },
+      ]);
+    } finally {
+      setFixingMessageId(null);
+      chatLoadingRef.current = false;
+      setChatLoading(false);
+    }
+  }, [messages, refreshActions]);
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, sendMessage, devMode, setDevMode, betaMode, setBetaMode, showActionCode, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

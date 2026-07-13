@@ -38,6 +38,13 @@ export interface Action {
   metadata: ActionMetadata | null;
 }
 
+export interface FixResultEvent {
+  appId: string;
+  action: string;
+  success: boolean;
+  error: string | null;
+}
+
 export interface FileAttachment {
   identifier: string;
   filename: string;
@@ -174,10 +181,45 @@ function parseDataUri(uri: string): { mimeType: string; data: string } | null {
   return m ? { mimeType: m[1], data: m[2] } : null;
 }
 
+async function readAgentStream(
+  resp: Response,
+  onEvent: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop()!;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line));
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+
+  // Process any remaining buffer
+  if (buffer.trim()) {
+    try {
+      onEvent(JSON.parse(buffer));
+    } catch {
+      // skip
+    }
+  }
+}
+
 export async function agentChat(
   messages: Array<{ role: string; content: string; image?: string }>,
   threadId: string,
   onContent: (delta: string) => void,
+  onFixResult?: (result: FixResultEvent) => void,
 ): Promise<void> {
   const resp = await fetch(`${AGENT_ENDPOINT}/copilotkit/agents/execute`, {
     method: "POST",
@@ -212,38 +254,58 @@ export async function agentChat(
     throw new Error(`Agent API ${resp.status}: ${text.slice(0, 200)}`);
   }
 
-  const reader = resp.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        if (event.type === "TextMessageContent") {
-          onContent(event.content);
-        }
-      } catch {
-        // skip malformed lines
-      }
+  await readAgentStream(resp, (event) => {
+    if (event.type === "TextMessageContent") {
+      onContent(event.content as string);
+    } else if (event.type === "FixResult" && onFixResult) {
+      onFixResult(event as unknown as FixResultEvent);
     }
+  });
+}
+
+export async function fixAction(
+  ctx: {
+    appId: string;
+    actionIdentifier: string;
+    threadId: string;
+    error: string;
+    stdout?: string;
+    inputs?: Record<string, unknown>;
+    files?: File[];
+  },
+  onContent: (content: string) => void,
+): Promise<FixResultEvent | null> {
+  const formData = new FormData();
+  formData.append("app_id", ctx.appId);
+  formData.append("action_identifier", ctx.actionIdentifier);
+  formData.append("thread_id", ctx.threadId);
+  formData.append("appgroup_id", APPGROUP_ID);
+  formData.append("error", ctx.error);
+  if (ctx.stdout) formData.append("stdout", ctx.stdout);
+  if (ctx.inputs) formData.append("inputs", JSON.stringify(ctx.inputs));
+  if (ctx.files) {
+    // HEIC/HEIF → JPEG before upload (iPhone photos; server 500s on HEIC).
+    for (const file of ctx.files) formData.append("files", await ensureUploadableImage(file));
   }
 
-  // Process any remaining buffer
-  if (buffer.trim()) {
-    try {
-      const event = JSON.parse(buffer);
-      if (event.type === "TextMessageContent") {
-        onContent(event.content);
-      }
-    } catch {
-      // skip
-    }
+  const resp = await fetch(`${AGENT_ENDPOINT}/agents/fix`, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Agent API ${resp.status}: ${text.slice(0, 200)}`);
   }
+
+  let fixResult: FixResultEvent | null = null;
+  await readAgentStream(resp, (event) => {
+    if (event.type === "TextMessageContent") {
+      onContent(event.content as string);
+    } else if (event.type === "FixResult") {
+      fixResult = event as unknown as FixResultEvent;
+    }
+  });
+  return fixResult;
 }

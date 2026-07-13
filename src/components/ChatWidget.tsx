@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconCopy, IconCheck, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize } from '@tabler/icons-react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconCopy, IconCheck, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
 import { useActions } from '@/context/ActionsContext';
 
@@ -352,7 +352,7 @@ function getFileTypeInfo(dataUri: string) {
 }
 
 export default function ChatWidget() {
-  const { chatOpen, setChatOpen, messages, chatLoading, sendMessage } = useActions();
+  const { chatOpen, setChatOpen, messages, chatLoading, sendMessage, fixError, fixingMessageId } = useActions();
   const [input, setInput] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -468,7 +468,7 @@ export default function ChatWidget() {
             )}
             {messages.map((m) => (
               m.role === 'assistant' && !m.content ? null :
-              <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
                   m.role === 'user'
                     ? 'bg-primary text-primary-foreground rounded-br-md'
@@ -498,6 +498,17 @@ export default function ChatWidget() {
                     ))
                   )}
                 </div>
+                {m.fixContext && (
+                  <button
+                    type="button"
+                    onClick={() => fixError(m.id)}
+                    disabled={chatLoading || !!fixingMessageId}
+                    className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <IconWand size={14} />
+                    {fixingMessageId === m.id ? 'Wird behoben…' : 'Automatisch beheben'}
+                  </button>
+                )}
               </div>
             ))}
             {chatLoading && messages.length > 0 && messages[messages.length - 1].content !== 'In Arbeit...' && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content === '' && (
