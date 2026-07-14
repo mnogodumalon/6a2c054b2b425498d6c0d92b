@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import type { BeitraegeZahlungen, Veranstaltungen, Veranstaltungsteilnahmen, Mitglieder } from '@/types/app';
+import type { Veranstaltungsteilnahmen, Veranstaltungen, Mitglieder, BeitraegeZahlungen } from '@/types/app';
 import { LivingAppsService } from '@/services/livingAppsService';
 
 /** Dashboard data + the OPTIMISTIC-WRITE API.
@@ -13,26 +13,26 @@ import { LivingAppsService } from '@/services/livingAppsService';
  *  There is no other mechanism (no `__optimistic`, no `mutate`).
  */
 export function useDashboardData() {
-  const [beitraegeZahlungen, setBeitraegeZahlungen] = useState<BeitraegeZahlungen[]>([]);
-  const [veranstaltungen, setVeranstaltungen] = useState<Veranstaltungen[]>([]);
   const [veranstaltungsteilnahmen, setVeranstaltungsteilnahmen] = useState<Veranstaltungsteilnahmen[]>([]);
+  const [veranstaltungen, setVeranstaltungen] = useState<Veranstaltungen[]>([]);
   const [mitglieder, setMitglieder] = useState<Mitglieder[]>([]);
+  const [beitraegeZahlungen, setBeitraegeZahlungen] = useState<BeitraegeZahlungen[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const fetchAll = useCallback(async () => {
     setError(null);
     try {
-      const [beitraegeZahlungenData, veranstaltungenData, veranstaltungsteilnahmenData, mitgliederData] = await Promise.all([
-        LivingAppsService.getBeitraegeZahlungen(),
-        LivingAppsService.getVeranstaltungen(),
+      const [veranstaltungsteilnahmenData, veranstaltungenData, mitgliederData, beitraegeZahlungenData] = await Promise.all([
         LivingAppsService.getVeranstaltungsteilnahmen(),
+        LivingAppsService.getVeranstaltungen(),
         LivingAppsService.getMitglieder(),
+        LivingAppsService.getBeitraegeZahlungen(),
       ]);
-      setBeitraegeZahlungen(beitraegeZahlungenData);
-      setVeranstaltungen(veranstaltungenData);
       setVeranstaltungsteilnahmen(veranstaltungsteilnahmenData);
+      setVeranstaltungen(veranstaltungenData);
       setMitglieder(mitgliederData);
+      setBeitraegeZahlungen(beitraegeZahlungenData);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Fehler beim Laden der Daten'));
     } finally {
@@ -46,16 +46,16 @@ export function useDashboardData() {
   useEffect(() => {
     async function silentRefresh() {
       try {
-        const [beitraegeZahlungenData, veranstaltungenData, veranstaltungsteilnahmenData, mitgliederData] = await Promise.all([
-          LivingAppsService.getBeitraegeZahlungen(),
-          LivingAppsService.getVeranstaltungen(),
+        const [veranstaltungsteilnahmenData, veranstaltungenData, mitgliederData, beitraegeZahlungenData] = await Promise.all([
           LivingAppsService.getVeranstaltungsteilnahmen(),
+          LivingAppsService.getVeranstaltungen(),
           LivingAppsService.getMitglieder(),
+          LivingAppsService.getBeitraegeZahlungen(),
         ]);
-        setBeitraegeZahlungen(beitraegeZahlungenData);
-        setVeranstaltungen(veranstaltungenData);
         setVeranstaltungsteilnahmen(veranstaltungsteilnahmenData);
+        setVeranstaltungen(veranstaltungenData);
         setMitglieder(mitgliederData);
+        setBeitraegeZahlungen(beitraegeZahlungenData);
       } catch {
         // silently ignore — stale data is better than no data
       }
@@ -77,5 +77,5 @@ export function useDashboardData() {
     return m;
   }, [mitglieder]);
 
-  return { beitraegeZahlungen, setBeitraegeZahlungen, veranstaltungen, setVeranstaltungen, veranstaltungsteilnahmen, setVeranstaltungsteilnahmen, mitglieder, setMitglieder, loading, error, fetchAll, veranstaltungenMap, mitgliederMap };
+  return { veranstaltungsteilnahmen, setVeranstaltungsteilnahmen, veranstaltungen, setVeranstaltungen, mitglieder, setMitglieder, beitraegeZahlungen, setBeitraegeZahlungen, loading, error, fetchAll, veranstaltungenMap, mitgliederMap };
 }

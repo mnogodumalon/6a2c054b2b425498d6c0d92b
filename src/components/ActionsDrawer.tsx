@@ -83,6 +83,7 @@ interface ActionRowProps {
   running: boolean;
   disabled: boolean;
   devMode: boolean;
+  highlight: boolean;
   onRun: (action: Action) => void;
   onDelete: (action: Action) => Promise<void>;
   onShowCode: (action: Action) => void;
@@ -92,14 +93,14 @@ interface ActionRowProps {
 }
 
 function ActionRow({
-  action, files, running, disabled, devMode,
+  action, files, running, disabled, devMode, highlight,
   onRun, onDelete, onShowCode, onShowChanges, onDownload, onDeleteFile,
 }: ActionRowProps) {
   const [filesOpen, setFilesOpen] = useState(false);
   const latest = action.versions.length > 0 ? action.versions[action.versions.length - 1] : null;
 
   return (
-    <div className="rounded-2xl border bg-card shadow-sm overflow-hidden">
+    <div className={`rounded-2xl border bg-card shadow-sm overflow-hidden${highlight ? ' animate-[action-return_1.4s_ease-out]' : ''}`}>
       <div className="flex items-start gap-3 p-4">
         <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <IconBolt size={18} />
@@ -197,6 +198,7 @@ export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
   const {
     actions, runAction, deleteAction, showActionCode, openCodeDrawer, deleteAppAttachment,
     devMode, runningActionId, filesByAction, downloadFile, setChatOpen,
+    codeDrawerAction, actionsHighlight,
   } = useActions();
 
   // Footer version line → drawer, focused on the latest change's diff
@@ -205,13 +207,13 @@ export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
   const unassigned = filesByAction['__unassigned__'] || [];
   const total = actions.length + (unassigned.length > 0 ? 1 : 0);
 
-  // Esc closes
+  // Esc closes — unless the code drawer is stacked on top (it owns Esc then)
   useEffect(() => {
-    if (!open) return;
+    if (!open || codeDrawerAction) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, codeDrawerAction]);
 
   if (!open) return null;
 
@@ -280,6 +282,7 @@ export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
                   running={runningActionId === a.identifier}
                   disabled={runningActionId !== null}
                   devMode={devMode}
+                  highlight={actionsHighlight?.appId === a.app_id && actionsHighlight?.identifier === a.identifier}
                   onRun={runAction}
                   onDelete={deleteAction}
                   onShowCode={showActionCode}

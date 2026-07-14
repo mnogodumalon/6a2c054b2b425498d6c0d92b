@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import {
   IconX, IconCode, IconChevronDown, IconHistory, IconMessageCircle,
   IconChevronUp, IconRestore, IconPlayerPlay, IconWand, IconExternalLink,
+  IconArrowLeft, IconBolt,
 } from '@tabler/icons-react';
-import { format, parseISO } from 'date-fns';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
 import { useActions } from '@/context/ActionsContext';
-import { fetchActionHistory, type ActionVersion } from '@/lib/actions-agent';
+import { fetchActionHistory, type Action, type ActionVersion } from '@/lib/actions-agent';
 import { highlightPython, CopyButton, diffLines } from '@/lib/highlight';
 import { ChatPanel, JsonView } from '@/components/ChatWidget';
 
@@ -21,6 +22,11 @@ const ORIGIN_LABELS: Record<string, string> = {
 function formatDateTime(d?: string) {
   if (!d) return '';
   try { return format(parseISO(d), 'dd.MM.yyyy, HH:mm', { locale: de }); } catch { return d; }
+}
+
+function relTime(d?: string) {
+  if (!d) return '';
+  try { return formatDistanceToNow(parseISO(d), { addSuffix: true, locale: de }); } catch { return d; }
 }
 
 // Timeline label: the agent's own summary, or a localized fallback for
@@ -83,7 +89,7 @@ function VersionEntry({ version, current, selected, onSelect }: {
       type="button"
       onClick={() => onSelect(version.v)}
       aria-current={selected}
-      className={`relative w-full rounded-xl px-3 py-2.5 text-left flex flex-col gap-0.5 transition-colors min-h-[2.75rem] ${
+      className={`relative w-full shrink-0 rounded-xl px-3 py-2.5 text-left flex flex-col gap-0.5 transition-colors min-h-[2.75rem] ${
         selected ? 'bg-secondary' : 'hover:bg-muted'
       }`}
     >
@@ -108,13 +114,18 @@ function VersionEntry({ version, current, selected, onSelect }: {
 }
 
 export function ActionCodeDrawer() {
-  const { codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion, chatLoading, runAction, runningActionId, lastRunResult, fixLastRun, downloadFile } = useActions();
+  const {
+    codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion,
+    chatLoading, runAction, runningActionId, lastRunResult, fixLastRun, downloadFile,
+    actions, openCodeDrawer, backToActions, closeActionsDrawer, actionsDrawerOpen,
+  } = useActions();
 
   const [versions, setVersions] = useState<ActionVersion[] | null>(null);
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState(0);
   const [tab, setTab] = useState<'code' | 'diff' | 'out'>('code');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [dockOpen, setDockOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const lastRunTsRef = useRef(0);
@@ -135,6 +146,7 @@ export function ActionCodeDrawer() {
     setSelected(codeDrawerFocus?.version ?? action.current_version);
     setTab(codeDrawerFocus?.tab ?? 'code');
     setPickerOpen(false);
+    setSwitcherOpen(false);
     // Only runs finishing AFTER opening switch to the output tab
     lastRunTsRef.current = Date.now();
     // Drop stale probes and free their blob preview URLs
@@ -182,12 +194,19 @@ export function ActionCodeDrawer() {
     }
   }, [run]);
 
+  // Esc peels one level at a time: open menu → code view → (the Werkzeuge
+  // drawer underneath handles the final Esc itself)
   useEffect(() => {
     if (!action) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeCodeDrawer(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (switcherOpen) { setSwitcherOpen(false); return; }
+      if (pickerOpen) { setPickerOpen(false); return; }
+      backToActions();
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [action, closeCodeDrawer]);
+  }, [action, switcherOpen, pickerOpen, backToActions]);
 
   const sorted = useMemo(
     () => (versions ? [...versions].sort((a, b) => a.v - b.v) : []),
@@ -238,10 +257,20 @@ export function ActionCodeDrawer() {
         void loadHtmlPreview();
         continue;
       }
-      fetch(a.url, { method: 'HEAD', credentials: 'include' })
+      // GET + abort right after the headers arrive — file endpoints often
+      // answer HEAD with an error/HTML page, which would misclassify a PDF
+      // as a web page. Only a SUCCESSFUL html response counts as 'page';
+      // anything broken falls back to the neutral card with open/download.
+      const controller = new AbortController();
+      fetch(a.url, { credentials: 'include', signal: controller.signal })
         .then(resp => {
           const ct = (resp.headers.get('content-type') || '').toLowerCase();
           const cd = resp.headers.get('content-disposition') || '';
+          controller.abort();
+          if (!resp.ok) {
+            setProbes(p => ({ ...p, [a.url]: { kind: 'other' } }));
+            return;
+          }
           const fm = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
           const filename = fm ? decodeURIComponent(fm[1].trim()) : undefined;
           const kind: ArtifactKind = ct.includes('pdf') ? 'pdf'
@@ -261,6 +290,20 @@ export function ActionCodeDrawer() {
     setPickerOpen(false);
   }, []);
 
+  // ✕ / backdrop: close the whole stack (code view + Werkzeuge overview)
+  const closeAll = useCallback(() => {
+    closeCodeDrawer();
+    closeActionsDrawer();
+  }, [closeCodeDrawer, closeActionsDrawer]);
+
+  // Header switcher: retarget the drawer to another action in place —
+  // the load effect above resets history, tabs, and probes
+  const handleSwitch = useCallback((a: Action) => {
+    setSwitcherOpen(false);
+    if (action && a.app_id === action.app_id && a.identifier === action.identifier) return;
+    openCodeDrawer(a);
+  }, [action, openCodeDrawer]);
+
   const handleRestore = useCallback(async () => {
     if (!action || !selectedEntry) return;
     const ok = window.confirm(`Version wiederherstellen v${selectedEntry.v}?\n\nDer aktuelle Code wird ersetzt. Nichts geht verloren — es entsteht eine neue Version.`);
@@ -278,39 +321,118 @@ export function ActionCodeDrawer() {
   const title = action.title || action.identifier;
 
   // Portal: `position: fixed` must anchor to the viewport, not a transformed
-  // ancestor (same reasoning as ActionsDrawer)
+  // ancestor (same reasoning as ActionsDrawer). Stacking above the Werkzeuge
+  // drawer relies on mount order: this portal is only ever created AFTER the
+  // overview's (every entry path goes overview → code, never the reverse),
+  // so with equal z-[var(--z-overlay)] the later DOM node wins.
   return createPortal(
     <>
+      {/* Only one backdrop dims: while the overview lies underneath, its
+          backdrop already provides the dim — this one just catches clicks. */}
       <div
-        className="fixed inset-0 z-[var(--z-overlay)] bg-black/40 backdrop-blur-sm animate-in fade-in duration-150"
-        onClick={closeCodeDrawer}
+        className={`fixed inset-0 z-[var(--z-overlay)] animate-in fade-in duration-150 ${actionsDrawerOpen ? '' : 'bg-black/40 backdrop-blur-sm'}`}
+        onClick={closeAll}
       />
       <aside
         role="dialog"
         aria-label={title}
         className="fixed top-0 right-0 z-[var(--z-overlay)] h-full w-full sm:max-w-xl lg:max-w-3xl bg-card border-l border-border shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
       >
-        {/* Header */}
-        <header className="flex items-center gap-3 px-4 sm:px-6 py-3.5 border-b shrink-0">
+        {/* Header — ← goes one level up to the Werkzeuge overview; the title
+            doubles as a switcher between actions when there is more than one */}
+        <header className="relative flex items-center gap-2.5 px-3 sm:px-4 py-3.5 border-b shrink-0">
+          <button
+            type="button"
+            onClick={backToActions}
+            className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            aria-label="Zurück zu den Werkzeugen"
+            title="Zurück zu den Werkzeugen"
+          >
+            <IconArrowLeft size={18} />
+          </button>
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <IconCode size={18} />
           </span>
           <div className="flex-1 min-w-0">
-            <h2 className="text-base font-semibold tracking-tight truncate">{title}</h2>
-            <p className="text-xs text-muted-foreground truncate mt-0.5">
-              <span className="font-mono bg-muted rounded px-1 py-px">{action.identifier}</span>
-              <span className="ml-2">{action.app_name}</span>
-            </p>
+            {actions.length > 1 ? (
+              <button
+                type="button"
+                onClick={() => setSwitcherOpen(o => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={switcherOpen}
+                className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-0.5 -mx-1.5 text-left hover:bg-muted transition-colors"
+                title="Werkzeug wechseln"
+              >
+                <span className="min-w-0">
+                  <span className="block text-base font-semibold tracking-tight truncate">{title}</span>
+                  <span className="block text-xs text-muted-foreground truncate mt-0.5">
+                    <span className="font-mono bg-muted rounded px-1 py-px">{action.identifier}</span>
+                    <span className="ml-2">{action.app_name}</span>
+                  </span>
+                </span>
+                <IconChevronDown size={14} className={`shrink-0 text-muted-foreground transition-transform ${switcherOpen ? 'rotate-180' : ''}`} />
+              </button>
+            ) : (
+              <>
+                <h2 className="text-base font-semibold tracking-tight truncate">{title}</h2>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">
+                  <span className="font-mono bg-muted rounded px-1 py-px">{action.identifier}</span>
+                  <span className="ml-2">{action.app_name}</span>
+                </p>
+              </>
+            )}
           </div>
           <CopyButton text={code} />
           <button
             type="button"
-            onClick={closeCodeDrawer}
+            onClick={closeAll}
             className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
             aria-label="Schließen"
           >
             <IconX size={18} />
           </button>
+
+          {switcherOpen && (
+            <div
+              role="listbox"
+              aria-label="Werkzeug wechseln"
+              className="absolute left-14 top-full z-10 mt-1 flex max-h-80 w-80 max-w-[82vw] flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-card p-1.5 shadow-xl"
+            >
+              <div className="px-2 pt-1 pb-1.5 text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
+                Werkzeug wechseln
+              </div>
+              {actions.map(a => {
+                const isCurrent = a.app_id === action.app_id && a.identifier === action.identifier;
+                const latest = a.versions.length > 0 ? a.versions[a.versions.length - 1] : null;
+                return (
+                  <button
+                    key={`${a.app_id}/${a.identifier}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isCurrent}
+                    onClick={() => handleSwitch(a)}
+                    className={`flex w-full shrink-0 min-h-[2.75rem] items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${isCurrent ? 'bg-secondary' : 'hover:bg-muted'}`}
+                  >
+                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <IconBolt size={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{a.title || a.identifier}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        <span className="font-mono">{a.identifier}</span>
+                        {latest ? ` · ${relTime(latest.ts)}` : ''}
+                      </span>
+                    </span>
+                    {a.current_version > 0 && (
+                      <span className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold tabular-nums ${isCurrent ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                        v{a.current_version}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </header>
 
         <div className="flex flex-1 min-h-0">

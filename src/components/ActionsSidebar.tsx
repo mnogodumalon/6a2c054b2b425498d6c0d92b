@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import { IconBolt } from '@tabler/icons-react';
 import { useActions } from '@/context/ActionsContext';
 import { ActionsDrawer } from '@/components/ActionsDrawer';
@@ -6,16 +5,9 @@ import { ActionsDrawer } from '@/components/ActionsDrawer';
 const LABEL = 'Werkzeuge';
 
 export function ActionsSidebar() {
-  const { actions, filesByAction } = useActions();
-  const [open, setOpen] = useState(false);
-
-  // Execution errors surface in the chat (with the auto-fix button) — the
-  // drawer must get out of the way. Fired by ActionsContext.
-  useEffect(() => {
-    const close = () => setOpen(false);
-    window.addEventListener('actions-drawer-close', close);
-    return () => window.removeEventListener('actions-drawer-close', close);
-  }, []);
+  // The drawer's open state lives in the context so the code drawer can
+  // navigate back to the overview (and errors can fold it away).
+  const { actions, filesByAction, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer } = useActions();
 
   const unassignedCount = filesByAction['__unassigned__']?.length ?? 0;
   const total = actions.length + (unassignedCount > 0 ? 1 : 0);
@@ -27,7 +19,7 @@ export function ActionsSidebar() {
       <div className="px-3 pt-4">
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          onClick={openActionsDrawer}
           className="flex items-center gap-2 px-4 py-2 w-full rounded-2xl text-base transition-colors min-w-0 text-sidebar-foreground font-normal hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
         >
           <IconBolt size={16} className="shrink-0 text-sidebar-foreground/70" />
@@ -40,7 +32,7 @@ export function ActionsSidebar() {
         </button>
       </div>
 
-      <ActionsDrawer open={open} onClose={() => setOpen(false)} />
+      <ActionsDrawer open={actionsDrawerOpen} onClose={closeActionsDrawer} />
     </>
   );
 }

@@ -2,20 +2,17 @@
   "version": 1,
   "forms": [
     {
-      "entity": "beitraege_zahlungen",
-      "app_id": "6a2c05202232d348547938ed",
-      "path": "/rest/apps/6a2c05202232d348547938ed/records",
+      "entity": "veranstaltungsteilnahmen",
+      "app_id": "6a2c05211de15074379308bd",
+      "path": "/rest/apps/6a2c05211de15074379308bd/records",
       "allowed_fields": [
-        "beitragsjahr",
-        "beitragshoehe",
-        "zahlungsart",
-        "zahlungsdatum",
-        "zahlungsstatus",
-        "bemerkungen_zahlung"
+        "anmeldedatum",
+        "anwesenheit",
+        "bemerkungen_teilnahme"
       ],
       "pow": true,
       "pow_difficulty": 50000,
-      "title": "Beiträge & Zahlungen — Formular"
+      "title": "Veranstaltungsteilnahmen — Formular"
     },
     {
       "entity": "veranstaltungen",
@@ -35,19 +32,6 @@
       "pow": true,
       "pow_difficulty": 50000,
       "title": "Veranstaltungen — Formular"
-    },
-    {
-      "entity": "veranstaltungsteilnahmen",
-      "app_id": "6a2c05211de15074379308bd",
-      "path": "/rest/apps/6a2c05211de15074379308bd/records",
-      "allowed_fields": [
-        "anmeldedatum",
-        "anwesenheit",
-        "bemerkungen_teilnahme"
-      ],
-      "pow": true,
-      "pow_difficulty": 50000,
-      "title": "Veranstaltungsteilnahmen — Formular"
     },
     {
       "entity": "mitglieder",
@@ -72,6 +56,22 @@
       "pow": true,
       "pow_difficulty": 50000,
       "title": "Mitglieder — Formular"
+    },
+    {
+      "entity": "beitraege_zahlungen",
+      "app_id": "6a2c05202232d348547938ed",
+      "path": "/rest/apps/6a2c05202232d348547938ed/records",
+      "allowed_fields": [
+        "beitragsjahr",
+        "beitragshoehe",
+        "zahlungsart",
+        "zahlungsdatum",
+        "zahlungsstatus",
+        "bemerkungen_zahlung"
+      ],
+      "pow": true,
+      "pow_difficulty": 50000,
+      "title": "Beiträge & Zahlungen — Formular"
     }
   ]
 }

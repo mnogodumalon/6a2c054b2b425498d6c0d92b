@@ -164,3 +164,16 @@
   --sidebar-border: #e5e7eb;
   --sidebar-ring: #d14600;
 }
+
+/* Code drawer → back: the Werkzeug card the user came from flashes briefly.
+ * Applied via animate-[action-return_1.4s_ease-out]; the second shadow keeps
+ * the card's resting shadow-sm alive while the ring fades. */
+@keyframes action-return {
+  0%, 30% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent, 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+}

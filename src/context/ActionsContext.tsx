@@ -71,11 +71,16 @@ interface ActionsContextType {
   betaMode: boolean;
   setBetaMode: (v: boolean) => void;
   showActionCode: (action: Action) => void;
+  actionsDrawerOpen: boolean;
+  openActionsDrawer: () => void;
+  closeActionsDrawer: () => void;
   codeDrawerAction: Action | null;
   codeDrawerFocus: CodeDrawerFocus | null;
   openCodeDrawer: (action: Action, focus?: CodeDrawerFocus) => void;
   openCodeDrawerFor: (appId: string, identifier: string, focus?: CodeDrawerFocus) => void;
   closeCodeDrawer: () => void;
+  backToActions: () => void;
+  actionsHighlight: { appId: string; identifier: string } | null;
   revertActionVersion: (appId: string, identifier: string, to: number, expectedCurrent?: number) => Promise<void>;
   deleteAction: (action: Action) => Promise<void>;
   inputFormAction: Action | null;
@@ -183,11 +188,25 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     void refreshActions();
   }, [refreshActions]);
 
+  // The Werkzeuge drawer and the code drawer form one navigation stack:
+  // the overview is the base level, the code view stacks on top of it.
+  const [actionsDrawerOpen, setActionsDrawerOpen] = useState(false);
+  // Briefly marks the card the user returned from (code drawer → back)
+  const [actionsHighlight, setActionsHighlight] = useState<{ appId: string; identifier: string } | null>(null);
+
+  useEffect(() => {
+    if (!actionsHighlight) return;
+    const t = setTimeout(() => setActionsHighlight(null), 1600);
+    return () => clearTimeout(t);
+  }, [actionsHighlight]);
+
+  const openActionsDrawer = useCallback(() => setActionsDrawerOpen(true), []);
+  const closeActionsDrawer = useCallback(() => setActionsDrawerOpen(false), []);
+
   // On execution errors the Werkzeug UI must give way to the chat, where the
-  // exception and the auto-fix button live. The drawer owns its own open
-  // state, so it listens for this event (same idiom as 'dashboard-refresh').
+  // exception and the auto-fix button live.
   const focusChatOnError = useCallback(() => {
-    window.dispatchEvent(new Event('actions-drawer-close'));
+    setActionsDrawerOpen(false);
     setChatOpen(true);
   }, []);
 
@@ -396,8 +415,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const [codeDrawerFocus, setCodeDrawerFocus] = useState<CodeDrawerFocus | null>(null);
 
   const openCodeDrawer = useCallback((action: Action, focus?: CodeDrawerFocus) => {
-    // The code view supersedes the Werkzeuge drawer (same idiom as errors)
-    window.dispatchEvent(new Event('actions-drawer-close'));
+    // The Werkzeuge overview (if open) stays mounted beneath — the code
+    // drawer stacks on top and ← returns to it, scroll position intact.
     setCodeDrawerFocus(focus ?? null);
     setCodeDrawerAction(action);
   }, []);
@@ -411,6 +430,18 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setCodeDrawerAction(null);
     setCodeDrawerFocus(null);
   }, []);
+
+  // ← in the code drawer: one level up to the Werkzeuge overview — no matter
+  // where the code view was opened from (overview, dashboard card, version
+  // card in the chat). The card the user came from flashes briefly.
+  const backToActions = useCallback(() => {
+    if (codeDrawerAction) {
+      setActionsHighlight({ appId: codeDrawerAction.app_id, identifier: codeDrawerAction.identifier });
+    }
+    setCodeDrawerAction(null);
+    setCodeDrawerFocus(null);
+    setActionsDrawerOpen(true);
+  }, [codeDrawerAction]);
 
   // The dev-mode </> button opens the code drawer (used to dump the source
   // into the chat as a markdown message)
@@ -673,7 +704,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

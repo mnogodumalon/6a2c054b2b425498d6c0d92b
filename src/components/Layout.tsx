@@ -71,7 +71,7 @@ export function Layout() {
         <div className="flex flex-col h-full">
         <nav className="px-3 pt-4 space-y-0.5">
           <a
-            href="/gateway/apps/6a2c05202232d348547938ed?template=list_page"
+            href="/gateway/apps/6a2c05211de15074379308bd?template=list_page"
             className="flex items-center gap-2 px-4 py-2 rounded-2xl text-base transition-colors min-w-0 text-sidebar-foreground font-normal hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
           >
             <IconArrowBackUp size={16} className="shrink-0" />
