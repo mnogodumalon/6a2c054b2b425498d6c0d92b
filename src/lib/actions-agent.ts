@@ -30,6 +30,23 @@ export interface ActionMetadata {
   description?: string;
 }
 
+export interface ActionVersionMeta {
+  v: number;
+  ts: string;
+  origin: string;
+  summary: string;
+  revert_of?: number;
+}
+
+export interface ActionVersion extends ActionVersionMeta {
+  code: string;
+}
+
+export interface ActionHistory {
+  current: number;
+  versions: ActionVersion[];
+}
+
 export interface Action {
   identifier: string;
   title: string;
@@ -38,6 +55,8 @@ export interface Action {
   app_name: string;
   value: string;
   metadata: ActionMetadata | null;
+  current_version: number;
+  versions: ActionVersionMeta[];
 }
 
 export interface FixResultEvent {
@@ -45,6 +64,14 @@ export interface FixResultEvent {
   action: string;
   success: boolean;
   error: string | null;
+}
+
+export interface ActionCodeChangedEvent {
+  appId: string;
+  action: string;
+  version: number;
+  summary: string;
+  origin: string;
 }
 
 export interface FileAttachment {
@@ -77,6 +104,9 @@ export async function fetchActionsAndFiles(): Promise<{ actions: Action[]; files
         app_name: app.app_name,
         value: action.value || "",
         metadata: action.metadata ?? null,
+        // Defaults keep the UI working against a backend without versioning
+        current_version: action.current_version ?? 0,
+        versions: action.versions ?? [],
       });
     }
     for (const file of app.files || []) {
@@ -168,6 +198,46 @@ export async function deleteAppAttachment(
   }
 }
 
+export async function fetchActionHistory(
+  appId: string,
+  actionIdentifier: string,
+): Promise<ActionHistory> {
+  const resp = await fetch(
+    `${AGENT_ENDPOINT}/actions/apps/${appId}/${actionIdentifier}/history`,
+    { credentials: "include" },
+  );
+  if (!resp.ok) return { current: 0, versions: [] };
+  const data = await resp.json();
+  return { current: data.current ?? 0, versions: data.versions ?? [] };
+}
+
+export async function revertAction(
+  appId: string,
+  actionIdentifier: string,
+  to: number,
+  expectedCurrent?: number,
+): Promise<{ ok: boolean; current: number | null; version: ActionVersion | null; error: string | null }> {
+  try {
+    const resp = await fetch(
+      `${AGENT_ENDPOINT}/actions/apps/${appId}/${actionIdentifier}/revert`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ to, expected_current: expectedCurrent ?? null }),
+      },
+    );
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => null);
+      return { ok: false, current: null, version: null, error: data?.detail || `HTTP ${resp.status}` };
+    }
+    const data = await resp.json();
+    return { ok: true, current: data.current ?? null, version: data.version ?? null, error: null };
+  } catch (err) {
+    return { ok: false, current: null, version: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function downloadFile(url: string, filename: string): Promise<void> {
   const resp = await fetch(url, { credentials: "include" });
   const blob = await resp.blob();
@@ -222,6 +292,12 @@ export async function agentChat(
   threadId: string,
   onContent: (delta: string) => void,
   onFixResult?: (result: FixResultEvent) => void,
+  opts?: {
+    // Set while the chat is docked to an action's code view — the agent
+    // resolves "the code" / "this action" to it.
+    activeAction?: { app_id: string; identifier: string };
+    onCodeChanged?: (event: ActionCodeChangedEvent) => void;
+  },
 ): Promise<void> {
   const resp = await fetch(`${AGENT_ENDPOINT}/copilotkit/agents/execute`, {
     method: "POST",
@@ -231,7 +307,12 @@ export async function agentChat(
       name: "klar-agent",
       threadId,
       state: {},
-      properties: { appgroup_id: APPGROUP_ID, lang: LANG },
+      properties: {
+        appgroup_id: APPGROUP_ID,
+        lang: LANG,
+        // JSON.stringify drops the key when undefined
+        active_action: opts?.activeAction,
+      },
       messages: messages.map((m) => {
         const parsed = m.image ? parseDataUri(m.image) : null;
         const content = parsed
@@ -263,6 +344,8 @@ export async function agentChat(
       onContent(event.content as string);
     } else if (event.type === "FixResult" && onFixResult) {
       onFixResult(event as unknown as FixResultEvent);
+    } else if (event.type === "ActionCodeChanged" && opts?.onCodeChanged) {
+      opts.onCodeChanged(event as unknown as ActionCodeChangedEvent);
     }
   });
 }
@@ -278,6 +361,7 @@ export async function fixAction(
     files?: File[];
   },
   onContent: (content: string) => void,
+  onCodeChanged?: (event: ActionCodeChangedEvent) => void,
 ): Promise<FixResultEvent | null> {
   const formData = new FormData();
   formData.append("app_id", ctx.appId);
@@ -310,6 +394,8 @@ export async function fixAction(
       onContent(event.content as string);
     } else if (event.type === "FixResult") {
       fixResult = event as unknown as FixResultEvent;
+    } else if (event.type === "ActionCodeChanged" && onCodeChanged) {
+      onCodeChanged(event as unknown as ActionCodeChangedEvent);
     }
   });
   return fixResult;

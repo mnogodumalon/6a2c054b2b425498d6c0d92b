@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
-import type { Action, FileAttachment } from '@/lib/actions-agent';
-import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, fixAction, downloadFile } from '@/lib/actions-agent';
+import type { Action, ActionCodeChangedEvent, FileAttachment } from '@/lib/actions-agent';
+import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, fixAction, revertAction as revertActionApi, downloadFile } from '@/lib/actions-agent';
 
 export type ExecErrorContext = {
   actionName: string;
@@ -10,6 +10,18 @@ export type ExecErrorContext = {
   stdout?: string;
   inputs?: Record<string, unknown>;
   files?: File[];
+};
+
+// Where the code drawer should land when opened (e.g. from a version card)
+export type CodeDrawerFocus = { version: number; tab: 'code' | 'diff' };
+
+// Payload of a version card in the chat — one per code save by the agent
+export type VersionInfo = {
+  appId: string;
+  actionIdentifier: string;
+  version: number;
+  summary: string;
+  origin: string;
 };
 
 type Message = {
@@ -24,6 +36,7 @@ type Message = {
   // neutral system event instead of a primary user bubble.
   kind?: 'action';
   fixContext?: ExecErrorContext;
+  versionInfo?: VersionInfo;
 };
 
 interface ActionsContextType {
@@ -42,6 +55,12 @@ interface ActionsContextType {
   betaMode: boolean;
   setBetaMode: (v: boolean) => void;
   showActionCode: (action: Action) => void;
+  codeDrawerAction: Action | null;
+  codeDrawerFocus: CodeDrawerFocus | null;
+  openCodeDrawer: (action: Action, focus?: CodeDrawerFocus) => void;
+  openCodeDrawerFor: (appId: string, identifier: string, focus?: CodeDrawerFocus) => void;
+  closeCodeDrawer: () => void;
+  revertActionVersion: (appId: string, identifier: string, to: number, expectedCurrent?: number) => Promise<void>;
   deleteAction: (action: Action) => Promise<void>;
   inputFormAction: Action | null;
   inputFormOptions: Record<string, Array<{ value: string; label: string }>> | null;
@@ -279,15 +298,79 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setRunningActionId(null);
   }, []);
 
+  const [codeDrawerAction, setCodeDrawerAction] = useState<Action | null>(null);
+  const [codeDrawerFocus, setCodeDrawerFocus] = useState<CodeDrawerFocus | null>(null);
+
+  const openCodeDrawer = useCallback((action: Action, focus?: CodeDrawerFocus) => {
+    // The code view supersedes the Werkzeuge drawer (same idiom as errors)
+    window.dispatchEvent(new Event('actions-drawer-close'));
+    setCodeDrawerFocus(focus ?? null);
+    setCodeDrawerAction(action);
+  }, []);
+
+  const openCodeDrawerFor = useCallback((appId: string, identifier: string, focus?: CodeDrawerFocus) => {
+    const action = actions.find(a => a.app_id === appId && a.identifier === identifier);
+    if (action) openCodeDrawer(action, focus);
+  }, [actions, openCodeDrawer]);
+
+  const closeCodeDrawer = useCallback(() => {
+    setCodeDrawerAction(null);
+    setCodeDrawerFocus(null);
+  }, []);
+
+  // The dev-mode </> button opens the code drawer (used to dump the source
+  // into the chat as a markdown message)
   const showActionCode = useCallback((action: Action) => {
-    const code = action.value.trim() || '# Leere Aktion';
-    const msg = `**Code für \`${action.identifier}\` in \`${action.app_name}\`:**\n\n\`\`\`python\n${code}\n\`\`\``;
-    setChatOpen(true);
+    openCodeDrawer(action);
+  }, [openCodeDrawer]);
+
+  const appendVersionCard = useCallback((info: VersionInfo) => {
     setMessages(prev => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'assistant', content: msg },
+      { id: crypto.randomUUID(), role: 'assistant', content: '', versionInfo: info },
     ]);
   }, []);
+
+  // The agent saved action code during a chat/fix turn: show a version card
+  // in the chat, refresh the actions, and let an open code drawer jump to
+  // the new version.
+  const handleCodeChanged = useCallback((event: ActionCodeChangedEvent) => {
+    appendVersionCard({
+      appId: event.appId,
+      actionIdentifier: event.action,
+      version: event.version,
+      summary: event.summary,
+      origin: event.origin,
+    });
+    void refreshActions();
+    window.dispatchEvent(new CustomEvent('action-code-changed', {
+      detail: { appId: event.appId, identifier: event.action, version: event.version },
+    }));
+  }, [appendVersionCard, refreshActions]);
+
+  const revertActionVersion = useCallback(async (appId: string, identifier: string, to: number, expectedCurrent?: number) => {
+    const result = await revertActionApi(appId, identifier, to, expectedCurrent);
+    if (!result.ok || !result.version) {
+      setChatOpen(true);
+      setMessages(prev => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', content: `**Wiederherstellen fehlgeschlagen:** ${result.error ?? ''}` },
+      ]);
+      return;
+    }
+    appendVersionCard({
+      appId,
+      actionIdentifier: identifier,
+      version: result.version.v,
+      summary: `Zurückgesetzt auf Version ${to}`,
+      origin: 'revert',
+    });
+    void refreshActions();
+    window.dispatchEvent(new Event('dashboard-refresh'));
+    window.dispatchEvent(new CustomEvent('action-code-changed', {
+      detail: { appId, identifier, version: result.version.v },
+    }));
+  }, [appendVersionCard, refreshActions]);
 
   const deleteActionFn = useCallback(async (action: Action) => {
     const confirmed = window.confirm(`Aktion löschen "${action.identifier}" (aus "${action.app_name}")?`);
@@ -367,6 +450,12 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       }, (fixResult) => {
         // A fix pending on this thread verified during the chat turn.
         if (fixResult.success) releaseFixContexts(fixResult.appId, fixResult.action);
+      }, {
+        // Docked to the code drawer: the agent resolves "the code" to it
+        activeAction: codeDrawerAction
+          ? { app_id: codeDrawerAction.app_id, identifier: codeDrawerAction.identifier }
+          : undefined,
+        onCodeChanged: handleCodeChanged,
       });
     } catch (err) {
       setMessages(prev =>
@@ -382,7 +471,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       void refreshActions();
       window.dispatchEvent(new Event('dashboard-refresh'));
     }
-  }, [messages, threadId, refreshActions, releaseFixContexts]);
+  }, [messages, threadId, refreshActions, releaseFixContexts, codeDrawerAction, handleCodeChanged]);
 
   const fixError = useCallback(async (messageId: string) => {
     const ctx = messages.find(m => m.id === messageId)?.fixContext;
@@ -423,6 +512,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             prev.map(m => m.id === answerId ? { ...m, content: m.content + content } : m)
           );
         },
+        handleCodeChanged,
       );
       if (result?.success) {
         // The agent's verified replay WAS the execution — nothing to re-run.
@@ -464,11 +554,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       chatLoadingRef.current = false;
       setChatLoading(false);
     }
-  }, [messages, refreshActions]);
+  }, [messages, refreshActions, handleCodeChanged]);
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

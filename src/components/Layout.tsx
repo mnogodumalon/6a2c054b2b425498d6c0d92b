@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { IconAlertCircle, IconArrowBackUp, IconMenu2 } from '@tabler/icons-react';
 import { useState, useEffect } from 'react';
 import ChatWidget from '@/components/ChatWidget';
+import { ActionCodeDrawer } from '@/components/ActionCodeDrawer';
 import { ActionInputDialog } from '@/components/ActionInputDialog';
 import { TopBar } from '@/components/TopBar';
 import { ActionsSidebar } from '@/components/ActionsSidebar';
@@ -112,6 +113,7 @@ export function Layout() {
       </div>
 
       <ChatWidget />
+      <ActionCodeDrawer />
 
       {inputFormAction && inputFormAction.metadata?.input_schema && (
         <ActionInputDialog

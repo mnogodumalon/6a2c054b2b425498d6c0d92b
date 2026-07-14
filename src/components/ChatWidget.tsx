@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconCopy, IconCheck, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand } from '@tabler/icons-react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
+import { highlightPython, CopyButton } from '@/lib/highlight';
 import { useActions } from '@/context/ActionsContext';
 
 // ---------------------------------------------------------------------------
@@ -131,64 +132,6 @@ function JsonView({ text }: { text: string }) {
     <div className="my-1.5 p-2.5 rounded-lg bg-black/5 overflow-x-auto text-[0.9em]">
       <JsonValue value={parsed} />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Lightweight Python syntax highlighter (no external deps)
-// ---------------------------------------------------------------------------
-
-function highlightPython(code: string): React.ReactNode[] {
-  const tokens: Array<{ type: string; text: string }> = [];
-  const re = /(#[^\n]*)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|"""[\s\S]*?"""|'''[\s\S]*?''')|(@\w+)|\b(def|class|return|if|elif|else|for|while|try|except|finally|with|as|import|from|raise|yield|lambda|and|or|not|in|is|True|False|None|break|continue|pass|async|await|global|nonlocal|del|assert)\b|\b(print|len|range|str|int|float|list|dict|set|tuple|isinstance|type|super|self|cls|enumerate|zip|map|filter|sorted|open|Exception|ValueError|TypeError|KeyError|RuntimeError|StopIteration|property|staticmethod|classmethod|__init__|__name__|__main__)\b|\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code)) !== null) {
-    if (m.index > last) tokens.push({ type: 'plain', text: code.slice(last, m.index) });
-    if (m[1]) tokens.push({ type: 'comment', text: m[0] });
-    else if (m[2]) tokens.push({ type: 'string', text: m[0] });
-    else if (m[3]) tokens.push({ type: 'decorator', text: m[0] });
-    else if (m[4]) tokens.push({ type: 'keyword', text: m[0] });
-    else if (m[5]) tokens.push({ type: 'builtin', text: m[0] });
-    else if (m[6]) tokens.push({ type: 'number', text: m[0] });
-    else tokens.push({ type: 'plain', text: m[0] });
-    last = m.index + m[0].length;
-  }
-  if (last < code.length) tokens.push({ type: 'plain', text: code.slice(last) });
-
-  const colorMap: Record<string, string> = {
-    comment: 'text-emerald-600',
-    string: 'text-amber-600',
-    keyword: 'text-purple-600 font-medium',
-    builtin: 'text-blue-600',
-    number: 'text-orange-600',
-    decorator: 'text-rose-600',
-    plain: '',
-  };
-
-  return tokens.map((t, i) => (
-    t.type === 'plain'
-      ? <span key={i}>{t.text}</span>
-      : <span key={i} className={colorMap[t.type]}>{t.text}</span>
-  ));
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        });
-      }}
-      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
-      title={copied ? "Kopiert!" : "Code kopieren"}
-    >
-      {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-      {copied && <span>Kopiert!</span>}
-    </button>
   );
 }
 
@@ -351,12 +294,26 @@ function getFileTypeInfo(dataUri: string) {
   return null;
 }
 
-export default function ChatWidget() {
-  const { chatOpen, setChatOpen, messages, chatLoading, sendMessage, fixError, fixingMessageId } = useActions();
+// Localized labels for version-history origins (agent-written summaries stay
+// in the language the agent wrote them in; origins are localized here)
+const ORIGIN_LABELS: Record<string, string> = {
+  fix: 'Auto-Fix',
+  chat: 'Chat',
+  initial: 'Erstellt',
+  revert: 'Wiederhergestellt',
+};
+
+// ---------------------------------------------------------------------------
+// ChatPanel — message list + attachment preview + composer. Rendered by the
+// floating ChatWidget AND docked inside the action code drawer; both surfaces
+// show the SAME conversation from ActionsContext. Parent must be flex-col.
+// ---------------------------------------------------------------------------
+
+export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...', autoFocus = false, collapsed = false }: { placeholder?: string; autoFocus?: boolean; collapsed?: boolean }) {
+  const { messages, chatLoading, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion } = useActions();
   const [input, setInput] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -365,15 +322,14 @@ export default function ChatWidget() {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, chatLoading]);
+  }, [messages, chatLoading, collapsed]);
 
   useEffect(() => {
-    if (chatOpen && inputRef.current) {
+    if (autoFocus && inputRef.current) {
       // Delay focus to avoid iOS zoom glitch on panel open
       setTimeout(() => inputRef.current?.focus(), 300);
     }
-    if (!chatOpen) setIsFullscreen(false);
-  }, [chatOpen]);
+  }, [autoFocus]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -407,6 +363,189 @@ export default function ChatWidget() {
       handleSend();
     }
   };
+
+  return (
+    <>
+      {/* Messages (hidden while docked-collapsed — the composer stays) */}
+      <div ref={scrollRef} className={collapsed ? 'hidden' : 'flex-1 overflow-y-auto px-4 py-3 space-y-3'}>
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center gap-2 text-muted-foreground">
+            <IconSparkles size={28} stroke={1.5} />
+            <p className="text-xs">{placeholder}</p>
+          </div>
+        )}
+        {messages.map((m) => (
+          m.role === 'assistant' && !m.content && !m.versionInfo ? null :
+          <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+            {(m.content || m.role === 'user') && (
+              <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                m.role === 'user'
+                  ? m.kind === 'action'
+                    ? 'bg-muted text-muted-foreground border border-border rounded-br-md'
+                    : 'bg-primary text-primary-foreground rounded-br-md'
+                  : 'bg-muted text-foreground rounded-bl-md'
+              }`}>
+                {m.image && (() => {
+                  const ft = getFileTypeInfo(m.image);
+                  return ft ? (
+                    <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-black/10">
+                      <ft.Icon size={20} />
+                      <span className="text-xs font-medium">{ft.label}</span>
+                    </div>
+                  ) : (
+                    <img src={m.image} alt="" className="max-w-full max-h-32 rounded-lg mb-2" />
+                  );
+                })()}
+                {m.content === 'In Arbeit...' ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <IconLoader2 size={14} className="animate-spin" />
+                    In Arbeit...
+                  </span>
+                ) : m.role === 'assistant' ? (
+                  <ChatMarkdown content={m.content} />
+                ) : (
+                  m.content.split('\n').map((line, j) => (
+                    <span key={j}>{line}{j < m.content.split('\n').length - 1 && <br />}</span>
+                  ))
+                )}
+              </div>
+            )}
+            {m.fixContext && (
+              <button
+                type="button"
+                onClick={() => fixError(m.id)}
+                disabled={chatLoading || !!fixingMessageId}
+                className="mt-1.5 inline-flex w-full max-w-[85%] items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                <IconWand size={16} />
+                {fixingMessageId === m.id ? 'Wird behoben…' : 'Automatisch beheben'}
+              </button>
+            )}
+            {m.versionInfo && (
+              <div className="mt-1.5 w-full max-w-[85%] rounded-xl border border-border border-l-[3px] border-l-primary bg-card px-3.5 py-2.5">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <IconGitCommit size={14} className="text-primary shrink-0" />
+                  <span className="font-semibold text-foreground">Version {m.versionInfo.version}</span>
+                  <span>{ORIGIN_LABELS[m.versionInfo.origin] || m.versionInfo.origin}</span>
+                </div>
+                {m.versionInfo.summary && (
+                  <div className="mt-1 text-sm font-medium text-foreground">{m.versionInfo.summary}</div>
+                )}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {devMode && (
+                    <button
+                      type="button"
+                      onClick={() => openCodeDrawerFor(m.versionInfo!.appId, m.versionInfo!.actionIdentifier, { version: m.versionInfo!.version, tab: 'diff' })}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                    >
+                      Änderungen ansehen
+                    </button>
+                  )}
+                  {m.versionInfo.version > 1 && (
+                    <button
+                      type="button"
+                      disabled={chatLoading}
+                      onClick={() => revertActionVersion(m.versionInfo!.appId, m.versionInfo!.actionIdentifier, m.versionInfo!.version - 1)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                    >
+                      Rückgängig
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {chatLoading && messages.length > 0 && messages[messages.length - 1].content !== 'In Arbeit...' && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content === '' && (
+          <div className="flex justify-start">
+            <div className="bg-muted rounded-2xl rounded-bl-md px-3.5 py-2.5 flex items-center gap-2 text-sm text-muted-foreground">
+              <IconLoader2 size={14} className="animate-spin" />
+              Denkt nach...
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Attachment preview */}
+      {image && (
+        <div className="px-4 py-2">
+          <div className="relative inline-block">
+            {(() => {
+              const ft = getFileTypeInfo(image);
+              return ft ? (
+                <div className="h-16 px-4 rounded-lg border border-border bg-muted flex items-center gap-2">
+                  <ft.Icon size={24} className={`${ft.color} shrink-0`} />
+                  <span className="text-xs font-medium truncate max-w-[200px]">{fileName || ft.label}</span>
+                </div>
+              ) : (
+                <img src={image} alt="" className="h-16 rounded-lg border border-border" />
+              );
+            })()}
+            <button
+              onClick={() => { setImage(null); setFileName(null); }}
+              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-white flex items-center justify-center"
+            >
+              <IconX size={10} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Input */}
+      <div className="px-2.5 py-2 border-t border-border bg-card safe-area-pb">
+        <div className="flex items-end gap-1.5">
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="shrink-0 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Datei anhängen"
+          >
+            <IconPaperclip size={16} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*,.pdf,application/pdf,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={handleFile}
+            className="hidden"
+          />
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            rows={1}
+            style={{ fieldSizing: 'content', maxHeight: '4.5rem' } as React.CSSProperties}
+            className="flex-1 resize-none bg-muted rounded-xl px-3 py-2 text-base sm:text-sm outline-none border-0 placeholder:text-muted-foreground/60 overflow-y-auto"
+          />
+          <button
+            onClick={handleSend}
+            disabled={chatLoading || (!input.trim() && !image)}
+            className="shrink-0 p-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 hover:bg-primary/90 transition-colors"
+          >
+            <IconSend size={16} />
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ChatWidget — floating button + panel chrome around the ChatPanel
+// ---------------------------------------------------------------------------
+
+export default function ChatWidget() {
+  const { chatOpen, setChatOpen, codeDrawerAction } = useActions();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!chatOpen) setIsFullscreen(false);
+  }, [chatOpen]);
+
+  // While the code drawer is open, its chat dock is the single chat surface —
+  // the floating widget stays out of the way (same conversation either way).
+  if (codeDrawerAction) return null;
 
   return (
     <>
@@ -458,132 +597,7 @@ export default function ChatWidget() {
             </div>
           </div>
 
-          {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-            {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full text-center gap-2 text-muted-foreground">
-                <IconSparkles size={28} stroke={1.5} />
-                <p className="text-xs">Frage stellen oder Bild hochladen...</p>
-              </div>
-            )}
-            {messages.map((m) => (
-              m.role === 'assistant' && !m.content ? null :
-              <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-                <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                  m.role === 'user'
-                    ? m.kind === 'action'
-                      ? 'bg-muted text-muted-foreground border border-border rounded-br-md'
-                      : 'bg-primary text-primary-foreground rounded-br-md'
-                    : 'bg-muted text-foreground rounded-bl-md'
-                }`}>
-                  {m.image && (() => {
-                    const ft = getFileTypeInfo(m.image);
-                    return ft ? (
-                      <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-black/10">
-                        <ft.Icon size={20} />
-                        <span className="text-xs font-medium">{ft.label}</span>
-                      </div>
-                    ) : (
-                      <img src={m.image} alt="" className="max-w-full max-h-32 rounded-lg mb-2" />
-                    );
-                  })()}
-                  {m.content === 'In Arbeit...' ? (
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                      <IconLoader2 size={14} className="animate-spin" />
-                      In Arbeit...
-                    </span>
-                  ) : m.role === 'assistant' ? (
-                    <ChatMarkdown content={m.content} />
-                  ) : (
-                    m.content.split('\n').map((line, j) => (
-                      <span key={j}>{line}{j < m.content.split('\n').length - 1 && <br />}</span>
-                    ))
-                  )}
-                </div>
-                {m.fixContext && (
-                  <button
-                    type="button"
-                    onClick={() => fixError(m.id)}
-                    disabled={chatLoading || !!fixingMessageId}
-                    className="mt-1.5 inline-flex w-full max-w-[85%] items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  >
-                    <IconWand size={16} />
-                    {fixingMessageId === m.id ? 'Wird behoben…' : 'Automatisch beheben'}
-                  </button>
-                )}
-              </div>
-            ))}
-            {chatLoading && messages.length > 0 && messages[messages.length - 1].content !== 'In Arbeit...' && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content === '' && (
-              <div className="flex justify-start">
-                <div className="bg-muted rounded-2xl rounded-bl-md px-3.5 py-2.5 flex items-center gap-2 text-sm text-muted-foreground">
-                  <IconLoader2 size={14} className="animate-spin" />
-                  Denkt nach...
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Attachment preview */}
-          {image && (
-            <div className="px-4 py-2">
-              <div className="relative inline-block">
-                {(() => {
-                  const ft = getFileTypeInfo(image);
-                  return ft ? (
-                    <div className="h-16 px-4 rounded-lg border border-border bg-muted flex items-center gap-2">
-                      <ft.Icon size={24} className={`${ft.color} shrink-0`} />
-                      <span className="text-xs font-medium truncate max-w-[200px]">{fileName || ft.label}</span>
-                    </div>
-                  ) : (
-                    <img src={image} alt="" className="h-16 rounded-lg border border-border" />
-                  );
-                })()}
-                <button
-                  onClick={() => { setImage(null); setFileName(null); }}
-                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-white flex items-center justify-center"
-                >
-                  <IconX size={10} />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Input */}
-          <div className="px-2.5 py-2 border-t border-border bg-card safe-area-pb">
-            <div className="flex items-end gap-1.5">
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="shrink-0 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                title="Datei anhängen"
-              >
-                <IconPaperclip size={16} />
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*,.pdf,application/pdf,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={handleFile}
-                className="hidden"
-              />
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Frage stellen oder Bild hochladen..."
-                rows={1}
-                style={{ fieldSizing: 'content', maxHeight: '4.5rem' } as React.CSSProperties}
-                className="flex-1 resize-none bg-muted rounded-xl px-3 py-2 text-base sm:text-sm outline-none border-0 placeholder:text-muted-foreground/60 overflow-y-auto"
-              />
-              <button
-                onClick={handleSend}
-                disabled={chatLoading || (!input.trim() && !image)}
-                className="shrink-0 p-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 hover:bg-primary/90 transition-colors"
-              >
-                <IconSend size={16} />
-              </button>
-            </div>
-          </div>
+          <ChatPanel autoFocus={chatOpen} />
         </div>
       )}
     </>
