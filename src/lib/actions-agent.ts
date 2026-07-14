@@ -130,6 +130,9 @@ export async function executeAction(
   actionIdentifier: string,
   inputs?: Record<string, unknown>,
   files?: File[],
+  // Test-run of a historical version (code from the history param);
+  // omitted → the active version runs, exactly as before
+  version?: number,
 ): Promise<{ stdout: string | null; error: string | null }> {
   let resp: Response;
 
@@ -137,6 +140,7 @@ export async function executeAction(
     const formData = new FormData();
     formData.append("app_id", appId);
     formData.append("action_identifier", actionIdentifier);
+    if (version != null) formData.append("version", String(version));
     if (inputs) formData.append("inputs", JSON.stringify(inputs));
     if (files) {
       // HEIC/HEIF → JPEG before upload (iPhone photos; server 500s on HEIC).
@@ -152,7 +156,8 @@ export async function executeAction(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ app_id: appId, action_identifier: actionIdentifier }),
+      // JSON.stringify drops the key when version is undefined
+      body: JSON.stringify({ app_id: appId, action_identifier: actionIdentifier, version }),
     });
   }
 

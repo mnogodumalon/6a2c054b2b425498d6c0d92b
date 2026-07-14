@@ -24,6 +24,18 @@ export type VersionInfo = {
   origin: string;
 };
 
+// Result of the most recent action execution — feeds the code drawer's
+// output tab (version is set for test-runs of a historical version)
+export type RunResult = {
+  appId: string;
+  actionIdentifier: string;
+  version: number | null;
+  inputs?: Record<string, unknown>;
+  stdout: string | null;
+  error: string | null;
+  ts: number;
+};
+
 type Message = {
   id: string;
   role: 'user' | 'assistant';
@@ -45,7 +57,8 @@ interface ActionsContextType {
   setChatOpen: (open: boolean) => void;
   messages: Message[];
   chatLoading: boolean;
-  runAction: (action: Action) => void;
+  runAction: (action: Action, version?: number) => void;
+  lastRunResult: RunResult | null;
   sendMessage: (text: string, image?: string, imageName?: string) => void;
   fixError: (messageId: string) => void;
   fixingMessageId: string | null;
@@ -175,7 +188,9 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setChatOpen(true);
   }, []);
 
-  const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[]) => {
+  const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
+
+  const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[], version?: number) => {
     if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
     setChatLoading(true);
@@ -185,27 +200,50 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     const placeholderId = crypto.randomUUID();
     setMessages(prev => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}` },
+      { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}${version != null ? ` (v${version})` : ''}` },
       { id: placeholderId, role: 'assistant', content: 'In Arbeit...' },
     ]);
 
-    executeAction(action.app_id, action.identifier, inputs, files)
+    executeAction(action.app_id, action.identifier, inputs, files, version)
       .then(result => {
+        setLastRunResult({
+          appId: action.app_id,
+          actionIdentifier: action.identifier,
+          version: version ?? null,
+          inputs,
+          stdout: result.stdout,
+          error: result.error,
+          ts: Date.now(),
+        });
         if (result.error) focusChatOnError();
         setMessages(prev =>
           prev.map(m => m.id === placeholderId
             ? { ...m, ...(result.error
-                ? execErrorUpdate(action, result.error, result.stdout, inputs, files)
+                // Test-runs of a historical version get no auto-fix button —
+                // the fix agent edits the ACTIVE code, not the tested one
+                ? (version != null
+                    ? { content: execErrorUpdate(action, result.error, result.stdout).content }
+                    : execErrorUpdate(action, result.error, result.stdout, inputs, files))
                 : { content: result.stdout || '(no output)' }) }
             : m)
         );
       })
       .catch(err => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setLastRunResult({
+          appId: action.app_id,
+          actionIdentifier: action.identifier,
+          version: version ?? null,
+          inputs,
+          stdout: null,
+          error: msg,
+          ts: Date.now(),
+        });
         focusChatOnError();
         setMessages(prev =>
           prev.map(m =>
             m.id === placeholderId
-              ? { ...m, content: `Fehler bei der Ausführung: ${err instanceof Error ? err.message : String(err)}` }
+              ? { ...m, content: `Fehler bei der Ausführung: ${msg}` }
               : m,
           )
         );
@@ -219,10 +257,15 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       });
   }, [refreshActions, focusChatOnError]);
 
-  const runAction = useCallback((action: Action) => {
+  // Version pending between opening the input dialog and its submit —
+  // set by runAction(action, version), consumed by submitActionInputs
+  const pendingRunVersionRef = useRef<number | null>(null);
+
+  const runAction = useCallback((action: Action, version?: number) => {
+    pendingRunVersionRef.current = version ?? null;
     const schema = action.metadata?.input_schema;
     if (!schema?.properties || Object.keys(schema.properties).length === 0) {
-      executeAndReport(action);
+      executeAndReport(action, undefined, undefined, version);
       return;
     }
 
@@ -240,7 +283,9 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         { id: placeholderId, role: 'assistant', content: 'Wird vorbereitet...' },
       ]);
 
-      executeAction(action.app_id, action.identifier, {})
+      // Preflight runs the SAME version so the dialog options match the
+      // code that will be tested
+      executeAction(action.app_id, action.identifier, {}, undefined, version)
         .then(result => {
           setMessages(prev => prev.filter(m => m.id !== placeholderId));
 
@@ -249,7 +294,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
             ]);
             return;
           }
@@ -289,10 +334,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const submitActionInputs = useCallback((action: Action, inputs: Record<string, unknown>, files: File[]) => {
     setInputFormAction(null);
     setInputFormOptions(null);
-    executeAndReport(action, inputs, files.length > 0 ? files : undefined);
+    executeAndReport(action, inputs, files.length > 0 ? files : undefined, pendingRunVersionRef.current ?? undefined);
   }, [executeAndReport]);
 
   const cancelInputForm = useCallback(() => {
+    pendingRunVersionRef.current = null;
     setInputFormAction(null);
     setInputFormOptions(null);
     setRunningActionId(null);
@@ -558,7 +604,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

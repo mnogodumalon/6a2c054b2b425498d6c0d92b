@@ -1,15 +1,15 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconX, IconCode, IconChevronDown, IconHistory, IconMessageCircle,
-  IconChevronUp, IconRestore,
+  IconChevronUp, IconRestore, IconPlayerPlay,
 } from '@tabler/icons-react';
 import { format, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
 import { useActions } from '@/context/ActionsContext';
 import { fetchActionHistory, type ActionVersion } from '@/lib/actions-agent';
 import { highlightPython, CopyButton, diffLines } from '@/lib/highlight';
-import { ChatPanel } from '@/components/ChatWidget';
+import { ChatPanel, JsonView } from '@/components/ChatWidget';
 
 const ORIGIN_LABELS: Record<string, string> = {
   fix: 'Auto-Fix',
@@ -29,6 +29,31 @@ function versionSummary(v: ActionVersion): string {
   if (v.summary) return v.summary;
   if (v.origin === 'revert' && v.revert_of) return `Zurückgesetzt auf Version ${v.revert_of}`;
   return ORIGIN_LABELS[v.origin] || '';
+}
+
+// File artifacts in a run's stdout JSON: every http(s) string value becomes
+// a card with open/download buttons and — for PDFs/images — an inline preview
+type Artifact = { url: string; filename: string };
+
+function extractArtifacts(stdout: string | null): Artifact[] {
+  if (!stdout) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return []; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const obj = parsed as Record<string, unknown>;
+  const nameHint = [obj.dateiname, obj.filename, obj.name].find(v => typeof v === 'string') as string | undefined;
+  const urls = Object.values(obj).filter((v): v is string => typeof v === 'string' && /^https?:\/\//.test(v));
+  return urls.map(url => ({
+    url,
+    filename: (urls.length === 1 && nameHint) || url.split('?')[0].split('/').pop() || 'datei',
+  }));
+}
+
+function artifactKind(a: Artifact): 'pdf' | 'image' | 'other' {
+  const probe = (a.filename || a.url.split('?')[0]).toLowerCase();
+  if (probe.endsWith('.pdf')) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp)$/.test(probe)) return 'image';
+  return 'other';
 }
 
 function VersionEntry({ version, current, selected, onSelect }: {
@@ -67,15 +92,23 @@ function VersionEntry({ version, current, selected, onSelect }: {
 }
 
 export function ActionCodeDrawer() {
-  const { codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion, chatLoading } = useActions();
+  const { codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion, chatLoading, runAction, runningActionId, lastRunResult, downloadFile } = useActions();
 
   const [versions, setVersions] = useState<ActionVersion[] | null>(null);
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState(0);
-  const [tab, setTab] = useState<'code' | 'diff'>('code');
+  const [tab, setTab] = useState<'code' | 'diff' | 'out'>('code');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dockOpen, setDockOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const lastRunTsRef = useRef(0);
+
+  // The latest execution of THIS action (feeds the output tab)
+  const run = action && lastRunResult
+    && lastRunResult.appId === action.app_id
+    && lastRunResult.actionIdentifier === action.identifier
+    ? lastRunResult
+    : null;
 
   // Load history when the drawer opens (or is retargeted to a version)
   useEffect(() => {
@@ -86,6 +119,8 @@ export function ActionCodeDrawer() {
     setSelected(codeDrawerFocus?.version ?? action.current_version);
     setTab(codeDrawerFocus?.tab ?? 'code');
     setPickerOpen(false);
+    // Only runs finishing AFTER opening switch to the output tab
+    lastRunTsRef.current = Date.now();
     void fetchActionHistory(action.app_id, action.identifier).then(h => {
       if (cancelled) return;
       setVersions(h.versions);
@@ -118,6 +153,14 @@ export function ActionCodeDrawer() {
     if (chatLoading) setDockOpen(true);
   }, [chatLoading]);
 
+  // A run finished while the drawer is open → surface its output
+  useEffect(() => {
+    if (run && run.ts > lastRunTsRef.current) {
+      lastRunTsRef.current = run.ts;
+      setTab('out');
+    }
+  }, [run]);
+
   useEffect(() => {
     if (!action) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeCodeDrawer(); };
@@ -143,6 +186,7 @@ export function ActionCodeDrawer() {
   );
 
   const isOld = selectedEntry !== null && selected !== current;
+  const artifacts = useMemo(() => (run && !run.error ? extractArtifacts(run.stdout) : []), [run]);
 
   const handleSelect = useCallback((v: number) => {
     setSelected(v);
@@ -260,6 +304,27 @@ export function ActionCodeDrawer() {
                   Änderungen zu v{prevEntry.v}
                 </button>
               )}
+              {run && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'out'}
+                  onClick={() => setTab('out')}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${tab === 'out' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'}`}
+                >
+                  Ausgabe
+                </button>
+              )}
+              <span className="flex-1" />
+              <button
+                type="button"
+                disabled={runningActionId !== null || chatLoading}
+                onClick={() => runAction(action, isOld ? selected : undefined)}
+                className="inline-flex min-h-[2.25rem] items-center gap-1.5 rounded-full bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                <IconPlayerPlay size={14} />
+                {isOld ? `v${selected} testen` : 'Ausführen'}
+              </button>
             </div>
 
             {/* Not-the-active-version banner */}
@@ -281,7 +346,66 @@ export function ActionCodeDrawer() {
               </div>
             )}
 
-            {/* Code / diff */}
+            {/* Output of the latest run */}
+            {tab === 'out' && run ? (
+              <div className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="text-sm font-semibold text-foreground">
+                    Testlauf{run.version != null ? ` v${run.version}` : (current > 0 ? ` v${current}` : '')}
+                  </span>
+                  <span className="tabular-nums">{formatDateTime(new Date(run.ts).toISOString())}</span>
+                  {run.version != null && (
+                    <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium">
+                      Code aus der Historie — nicht wiederhergestellt
+                    </span>
+                  )}
+                </div>
+                {run.inputs && Object.keys(run.inputs).length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-medium">Eingaben:</span>{' '}
+                    <span className="font-mono break-all">{JSON.stringify(run.inputs)}</span>
+                  </div>
+                )}
+                {run.error ? (
+                  <pre className="rounded-lg border border-red-200 bg-red-50 p-3 font-mono text-xs leading-relaxed text-red-700 whitespace-pre-wrap break-all">{run.error}</pre>
+                ) : (
+                  <>
+                    {artifacts.map((a, i) => (
+                      <div key={i} className="space-y-2 rounded-xl border border-border bg-card p-3">
+                        {artifactKind(a) === 'pdf' && (
+                          <object data={a.url} type="application/pdf" className="h-80 w-full rounded-lg border border-border" aria-label={a.filename} />
+                        )}
+                        {artifactKind(a) === 'image' && (
+                          <img src={a.url} alt={a.filename} className="max-h-80 max-w-full rounded-lg border border-border" />
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs">{a.filename}</span>
+                          <button
+                            type="button"
+                            onClick={() => window.open(a.url, '_blank', 'noopener')}
+                            className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
+                          >
+                            Öffnen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { void downloadFile(a.url, a.filename); }}
+                            className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
+                          >
+                            Herunterladen
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {run.stdout ? (
+                      <div className="text-sm"><JsonView text={run.stdout} /></div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">(keine Ausgabe)</p>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
             <div className="flex-1 min-h-0 overflow-auto bg-muted/20 py-2 font-mono text-xs leading-relaxed">
               {tab === 'diff' && diffOps ? (
                 diffOps.map((op, i) => (
@@ -306,6 +430,7 @@ export function ActionCodeDrawer() {
                 ))
               )}
             </div>
+            )}
 
             {/* Status bar */}
             <div className="flex items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-muted-foreground tabular-nums shrink-0">

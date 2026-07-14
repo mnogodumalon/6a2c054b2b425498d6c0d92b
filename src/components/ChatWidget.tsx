@@ -118,7 +118,7 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   return <span>{String(value)}</span>;
 }
 
-function JsonView({ text }: { text: string }) {
+export function JsonView({ text }: { text: string }) {
   const parsed = tryParseJson(text);
   if (parsed === undefined) {
     // Fallback: not valid JSON, render as code
