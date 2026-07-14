@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconX, IconCode, IconChevronDown, IconHistory, IconMessageCircle,
-  IconChevronUp, IconRestore, IconPlayerPlay,
+  IconChevronUp, IconRestore, IconPlayerPlay, IconWand, IconExternalLink,
 } from '@tabler/icons-react';
 import { format, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
@@ -32,27 +32,43 @@ function versionSummary(v: ActionVersion): string {
 }
 
 // File artifacts in a run's stdout JSON: every http(s) string value becomes
-// a card with open/download buttons and — for PDFs/images — an inline preview
+// a card with open/download buttons and — for PDFs/images — an inline preview.
+// Fields already shown on the card (URL, filename hint) are stripped from the
+// remaining JSON so nothing appears twice.
 type Artifact = { url: string; filename: string };
 
-function extractArtifacts(stdout: string | null): Artifact[] {
-  if (!stdout) return [];
+function splitRunOutput(stdout: string | null): { artifacts: Artifact[]; rest: string | null } {
+  if (!stdout) return { artifacts: [], rest: null };
   let parsed: unknown;
-  try { parsed = JSON.parse(stdout); } catch { return []; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  try { parsed = JSON.parse(stdout); } catch { return { artifacts: [], rest: stdout }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { artifacts: [], rest: stdout };
   const obj = parsed as Record<string, unknown>;
   const nameHint = [obj.dateiname, obj.filename, obj.name].find(v => typeof v === 'string') as string | undefined;
   const urls = Object.values(obj).filter((v): v is string => typeof v === 'string' && /^https?:\/\//.test(v));
-  return urls.map(url => ({
+  const artifacts = urls.map(url => ({
     url,
     filename: (urls.length === 1 && nameHint) || url.split('?')[0].split('/').pop() || 'datei',
   }));
+  const urlSet = new Set(urls);
+  const nameSet = new Set(artifacts.map(a => a.filename));
+  const restEntries = Object.entries(obj).filter(([k, v]) =>
+    !(typeof v === 'string' && (urlSet.has(v) || (nameSet.has(v) && ['dateiname', 'filename', 'name'].includes(k))))
+  );
+  return {
+    artifacts,
+    rest: restEntries.length ? JSON.stringify(Object.fromEntries(restEntries), null, 2) : null,
+  };
 }
 
-function artifactKind(a: Artifact): 'pdf' | 'image' | 'other' {
+// 'html' = generated HTML FILE (download + iframe preview);
+// 'page' = a web page such as a record link (plain link row, no download)
+type ArtifactKind = 'pdf' | 'image' | 'html' | 'page' | 'other';
+
+function artifactKind(a: Artifact): ArtifactKind {
   const probe = (a.filename || a.url.split('?')[0]).toLowerCase();
   if (probe.endsWith('.pdf')) return 'pdf';
   if (/\.(png|jpe?g|gif|webp)$/.test(probe)) return 'image';
+  if (/\.html?$/.test(probe)) return 'html';
   return 'other';
 }
 
@@ -92,7 +108,7 @@ function VersionEntry({ version, current, selected, onSelect }: {
 }
 
 export function ActionCodeDrawer() {
-  const { codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion, chatLoading, runAction, runningActionId, lastRunResult, downloadFile } = useActions();
+  const { codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion, chatLoading, runAction, runningActionId, lastRunResult, fixLastRun, downloadFile } = useActions();
 
   const [versions, setVersions] = useState<ActionVersion[] | null>(null);
   const [current, setCurrent] = useState(0);
@@ -121,6 +137,11 @@ export function ActionCodeDrawer() {
     setPickerOpen(false);
     // Only runs finishing AFTER opening switch to the output tab
     lastRunTsRef.current = Date.now();
+    // Drop stale probes and free their blob preview URLs
+    setProbes(prev => {
+      Object.values(prev).forEach(p => { if (p.previewUrl) URL.revokeObjectURL(p.previewUrl); });
+      return {};
+    });
     void fetchActionHistory(action.app_id, action.identifier).then(h => {
       if (cancelled) return;
       setVersions(h.versions);
@@ -186,7 +207,54 @@ export function ActionCodeDrawer() {
   );
 
   const isOld = selectedEntry !== null && selected !== current;
-  const artifacts = useMemo(() => (run && !run.error ? extractArtifacts(run.stdout) : []), [run]);
+  const { artifacts, rest } = useMemo(
+    () => (run && !run.error ? splitRunOutput(run.stdout) : { artifacts: [], rest: null }),
+    [run],
+  );
+
+  // Extension-less artifact URLs (common: upload ids, record links) get a
+  // HEAD probe — content-type decides the preview, content-disposition the
+  // display name AND whether text/html is a generated FILE (attachment /
+  // .html filename) or just a web page (record link → plain link row).
+  // HTML files additionally get a blob previewUrl: attachment-served HTML
+  // would otherwise trigger a download instead of rendering (iframe + tab).
+  const [probes, setProbes] = useState<Record<string, { kind: ArtifactKind; filename?: string; previewUrl?: string }>>({});
+  useEffect(() => {
+    for (const a of artifacts) {
+      if (probes[a.url]) continue;
+      const extKind = artifactKind(a);
+      if (extKind !== 'other' && extKind !== 'html') continue;
+
+      const loadHtmlPreview = (filename?: string) =>
+        fetch(a.url, { credentials: 'include' })
+          .then(r => r.blob())
+          .then(b => {
+            const html = b.type.includes('html') ? b : new Blob([b], { type: 'text/html' });
+            setProbes(p => ({ ...p, [a.url]: { kind: 'html', filename, previewUrl: URL.createObjectURL(html) } }));
+          })
+          .catch(() => setProbes(p => ({ ...p, [a.url]: { kind: 'html', filename } })));
+
+      if (extKind === 'html') {
+        void loadHtmlPreview();
+        continue;
+      }
+      fetch(a.url, { method: 'HEAD', credentials: 'include' })
+        .then(resp => {
+          const ct = (resp.headers.get('content-type') || '').toLowerCase();
+          const cd = resp.headers.get('content-disposition') || '';
+          const fm = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+          const filename = fm ? decodeURIComponent(fm[1].trim()) : undefined;
+          const kind: ArtifactKind = ct.includes('pdf') ? 'pdf'
+            : ct.startsWith('image/') ? 'image'
+            : ct.includes('html')
+              ? (cd.toLowerCase().includes('attachment') || (filename && /\.html?$/i.test(filename)) ? 'html' : 'page')
+              : 'other';
+          if (kind === 'html') { void loadHtmlPreview(filename); return; }
+          setProbes(p => ({ ...p, [a.url]: { kind, filename } }));
+        })
+        .catch(() => setProbes(p => ({ ...p, [a.url]: { kind: 'other' } })));
+    }
+  }, [artifacts, probes]);
 
   const handleSelect = useCallback((v: number) => {
     setSelected(v);
@@ -319,7 +387,7 @@ export function ActionCodeDrawer() {
               <button
                 type="button"
                 disabled={runningActionId !== null || chatLoading}
-                onClick={() => runAction(action, isOld ? selected : undefined)}
+                onClick={() => runAction(action, isOld ? selected : undefined, { silent: true })}
                 className="inline-flex min-h-[2.25rem] items-center gap-1.5 rounded-full bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
                 <IconPlayerPlay size={14} />
@@ -367,41 +435,78 @@ export function ActionCodeDrawer() {
                   </div>
                 )}
                 {run.error ? (
-                  <pre className="rounded-lg border border-red-200 bg-red-50 p-3 font-mono text-xs leading-relaxed text-red-700 whitespace-pre-wrap break-all">{run.error}</pre>
+                  <>
+                    <pre className="rounded-lg border border-red-200 bg-red-50 p-3 font-mono text-xs leading-relaxed text-red-700 whitespace-pre-wrap break-all">{run.error}</pre>
+                    {run.version == null && (
+                      <button
+                        type="button"
+                        onClick={fixLastRun}
+                        disabled={chatLoading || runningActionId !== null}
+                        className="inline-flex min-h-[2.5rem] w-full items-center justify-center gap-1.5 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      >
+                        <IconWand size={16} />
+                        {chatLoading ? 'Wird behoben…' : 'Automatisch beheben'}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <>
-                    {artifacts.map((a, i) => (
-                      <div key={i} className="space-y-2 rounded-xl border border-border bg-card p-3">
-                        {artifactKind(a) === 'pdf' && (
-                          <object data={a.url} type="application/pdf" className="h-80 w-full rounded-lg border border-border" aria-label={a.filename} />
-                        )}
-                        {artifactKind(a) === 'image' && (
-                          <img src={a.url} alt={a.filename} className="max-h-80 max-w-full rounded-lg border border-border" />
-                        )}
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate font-mono text-xs">{a.filename}</span>
-                          <button
-                            type="button"
-                            onClick={() => window.open(a.url, '_blank', 'noopener')}
-                            className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
-                          >
-                            Öffnen
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { void downloadFile(a.url, a.filename); }}
-                            className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
-                          >
-                            Herunterladen
-                          </button>
+                    {artifacts.map((a, i) => {
+                      const probe = probes[a.url];
+                      const kind = probe?.kind ?? artifactKind(a);
+                      const name = probe?.filename || a.filename;
+                      if (kind === 'page') {
+                        // A web page (e.g. record link), not a download
+                        return (
+                          <div key={i} className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+                            <IconExternalLink size={14} className="shrink-0 text-muted-foreground" />
+                            <a
+                              href={a.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="min-w-0 flex-1 truncate text-xs text-primary underline underline-offset-2"
+                            >
+                              {a.url}
+                            </a>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={i} className="space-y-2 rounded-xl border border-border bg-card p-3">
+                          {kind === 'pdf' && (
+                            <object data={a.url} type="application/pdf" className="h-80 w-full rounded-lg border border-border" aria-label={name} />
+                          )}
+                          {kind === 'image' && (
+                            <img src={a.url} alt={name} className="max-h-80 max-w-full rounded-lg border border-border" />
+                          )}
+                          {kind === 'html' && (
+                            <iframe src={probe?.previewUrl || a.url} sandbox="" title={name} className="h-80 w-full rounded-lg border border-border bg-white" />
+                          )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs">{name}</span>
+                            <button
+                              type="button"
+                              onClick={() => window.open(probe?.previewUrl || a.url, '_blank', 'noopener')}
+                              className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
+                            >
+                              Öffnen
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { void downloadFile(a.url, name); }}
+                              className="inline-flex min-h-[2rem] items-center rounded-lg border border-border bg-card px-2.5 text-xs font-medium hover:bg-muted transition-colors"
+                            >
+                              Herunterladen
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {run.stdout ? (
-                      <div className="text-sm"><JsonView text={run.stdout} /></div>
-                    ) : (
+                      );
+                    })}
+                    {rest ? (
+                      <div className="text-sm"><JsonView text={rest} /></div>
+                    ) : artifacts.length === 0 ? (
                       <p className="text-xs text-muted-foreground">(keine Ausgabe)</p>
-                    )}
+                    ) : null}
                   </>
                 )}
               </div>

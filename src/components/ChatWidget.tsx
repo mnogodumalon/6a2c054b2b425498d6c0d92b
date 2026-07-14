@@ -310,7 +310,7 @@ const ORIGIN_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...', autoFocus = false, collapsed = false }: { placeholder?: string; autoFocus?: boolean; collapsed?: boolean }) {
-  const { messages, chatLoading, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion } = useActions();
+  const { messages, chatLoading, runningActionId, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion } = useActions();
   const [input, setInput] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -520,7 +520,7 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
           />
           <button
             onClick={handleSend}
-            disabled={chatLoading || (!input.trim() && !image)}
+            disabled={chatLoading || !!runningActionId || (!input.trim() && !image)}
             className="shrink-0 p-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 hover:bg-primary/90 transition-colors"
           >
             <IconSend size={16} />

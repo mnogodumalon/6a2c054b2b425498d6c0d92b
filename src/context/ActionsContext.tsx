@@ -29,8 +29,10 @@ export type VersionInfo = {
 export type RunResult = {
   appId: string;
   actionIdentifier: string;
+  actionName: string;
   version: number | null;
   inputs?: Record<string, unknown>;
+  files?: File[];
   stdout: string | null;
   error: string | null;
   ts: number;
@@ -57,10 +59,11 @@ interface ActionsContextType {
   setChatOpen: (open: boolean) => void;
   messages: Message[];
   chatLoading: boolean;
-  runAction: (action: Action, version?: number) => void;
+  runAction: (action: Action, version?: number, opts?: { silent?: boolean }) => void;
   lastRunResult: RunResult | null;
   sendMessage: (text: string, image?: string, imageName?: string) => void;
   fixError: (messageId: string) => void;
+  fixLastRun: () => void;
   fixingMessageId: string | null;
   runningActionId: string | null;
   devMode: boolean;
@@ -190,31 +193,39 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
 
-  const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[], version?: number) => {
+  // silent = drawer-initiated run: the drawer's output tab is the single
+  // surface — no chat bubbles, no chat-busy state, no focus stealing. The
+  // chat stays reserved for the conversation with the agent.
+  const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[], version?: number, silent = false) => {
     if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
-    setChatLoading(true);
+    if (!silent) setChatLoading(true);
     setRunningActionId(action.identifier);
-    setChatOpen(true);
+    if (!silent) setChatOpen(true);
 
     const placeholderId = crypto.randomUUID();
-    setMessages(prev => [
-      ...prev,
-      { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}${version != null ? ` (v${version})` : ''}` },
-      { id: placeholderId, role: 'assistant', content: 'In Arbeit...' },
-    ]);
+    if (!silent) {
+      setMessages(prev => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}${version != null ? ` (v${version})` : ''}` },
+        { id: placeholderId, role: 'assistant', content: 'In Arbeit...' },
+      ]);
+    }
 
     executeAction(action.app_id, action.identifier, inputs, files, version)
       .then(result => {
         setLastRunResult({
           appId: action.app_id,
           actionIdentifier: action.identifier,
+          actionName: action.title || action.identifier,
           version: version ?? null,
           inputs,
+          files,
           stdout: result.stdout,
           error: result.error,
           ts: Date.now(),
         });
+        if (silent) return;
         if (result.error) focusChatOnError();
         setMessages(prev =>
           prev.map(m => m.id === placeholderId
@@ -233,12 +244,15 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         setLastRunResult({
           appId: action.app_id,
           actionIdentifier: action.identifier,
+          actionName: action.title || action.identifier,
           version: version ?? null,
           inputs,
+          files,
           stdout: null,
           error: msg,
           ts: Date.now(),
         });
+        if (silent) return;
         focusChatOnError();
         setMessages(prev =>
           prev.map(m =>
@@ -250,22 +264,25 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       })
       .finally(() => {
         chatLoadingRef.current = false;
-        setChatLoading(false);
+        if (!silent) setChatLoading(false);
         setRunningActionId(null);
         void refreshActions();
         window.dispatchEvent(new Event('dashboard-refresh'));
       });
   }, [refreshActions, focusChatOnError]);
 
-  // Version pending between opening the input dialog and its submit —
-  // set by runAction(action, version), consumed by submitActionInputs
+  // Version + silent flag pending between opening the input dialog and its
+  // submit — set by runAction, consumed by submitActionInputs
   const pendingRunVersionRef = useRef<number | null>(null);
+  const pendingRunSilentRef = useRef(false);
 
-  const runAction = useCallback((action: Action, version?: number) => {
+  const runAction = useCallback((action: Action, version?: number, opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
     pendingRunVersionRef.current = version ?? null;
+    pendingRunSilentRef.current = silent;
     const schema = action.metadata?.input_schema;
     if (!schema?.properties || Object.keys(schema.properties).length === 0) {
-      executeAndReport(action, undefined, undefined, version);
+      executeAndReport(action, undefined, undefined, version, silent);
       return;
     }
 
@@ -273,15 +290,17 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       // Two-phase: run preflight to get dynamic options
       if (chatLoadingRef.current) return;
       chatLoadingRef.current = true;
-      setChatLoading(true);
+      if (!silent) setChatLoading(true);
       setRunningActionId(action.identifier);
-      setChatOpen(true);
+      if (!silent) setChatOpen(true);
 
       const placeholderId = crypto.randomUUID();
-      setMessages(prev => [
-        ...prev,
-        { id: placeholderId, role: 'assistant', content: 'Wird vorbereitet...' },
-      ]);
+      if (!silent) {
+        setMessages(prev => [
+          ...prev,
+          { id: placeholderId, role: 'assistant', content: 'Wird vorbereitet...' },
+        ]);
+      }
 
       // Preflight runs the SAME version so the dialog options match the
       // code that will be tested
@@ -291,6 +310,20 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
           if (result.error) {
             setRunningActionId(null);
+            if (silent) {
+              // Drawer runs: the preflight error belongs to the output tab
+              setLastRunResult({
+                appId: action.app_id,
+                actionIdentifier: action.identifier,
+                actionName: action.title || action.identifier,
+                version: version ?? null,
+                inputs: {},
+                stdout: result.stdout,
+                error: result.error,
+                ts: Date.now(),
+              });
+              return;
+            }
             focusChatOnError();
             setMessages(prev => [
               ...prev,
@@ -312,16 +345,30 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         })
         .catch(err => {
           setRunningActionId(null);
-          focusChatOnError();
+          const msg = err instanceof Error ? err.message : String(err);
           setMessages(prev => prev.filter(m => m.id !== placeholderId));
+          if (silent) {
+            setLastRunResult({
+              appId: action.app_id,
+              actionIdentifier: action.identifier,
+              actionName: action.title || action.identifier,
+              version: version ?? null,
+              inputs: {},
+              stdout: null,
+              error: msg,
+              ts: Date.now(),
+            });
+            return;
+          }
+          focusChatOnError();
           setMessages(prev => [
             ...prev,
-            { id: crypto.randomUUID(), role: 'assistant', content: `Fehler bei der Ausführung: ${err instanceof Error ? err.message : String(err)}` },
+            { id: crypto.randomUUID(), role: 'assistant', content: `Fehler bei der Ausführung: ${msg}` },
           ]);
         })
         .finally(() => {
           chatLoadingRef.current = false;
-          setChatLoading(false);
+          if (!silent) setChatLoading(false);
         });
       return;
     }
@@ -334,11 +381,12 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const submitActionInputs = useCallback((action: Action, inputs: Record<string, unknown>, files: File[]) => {
     setInputFormAction(null);
     setInputFormOptions(null);
-    executeAndReport(action, inputs, files.length > 0 ? files : undefined, pendingRunVersionRef.current ?? undefined);
+    executeAndReport(action, inputs, files.length > 0 ? files : undefined, pendingRunVersionRef.current ?? undefined, pendingRunSilentRef.current);
   }, [executeAndReport]);
 
   const cancelInputForm = useCallback(() => {
     pendingRunVersionRef.current = null;
+    pendingRunSilentRef.current = false;
     setInputFormAction(null);
     setInputFormOptions(null);
     setRunningActionId(null);
@@ -519,12 +567,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     }
   }, [messages, threadId, refreshActions, releaseFixContexts, codeDrawerAction, handleCodeChanged]);
 
-  const fixError = useCallback(async (messageId: string) => {
-    const ctx = messages.find(m => m.id === messageId)?.fixContext;
-    if (!ctx || chatLoadingRef.current) return;
+  const startFix = useCallback(async (ctx: ExecErrorContext, sourceMessageId: string | null) => {
+    if (chatLoadingRef.current) return;
     chatLoadingRef.current = true;
     setChatLoading(true);
-    setFixingMessageId(messageId);
+    setFixingMessageId(sourceMessageId);
 
     // Fresh thread: the fix conversation replaces the current chat session,
     // so follow-up questions from the fix agent continue on the same thread.
@@ -600,11 +647,33 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       chatLoadingRef.current = false;
       setChatLoading(false);
     }
-  }, [messages, refreshActions, handleCodeChanged]);
+  }, [refreshActions, handleCodeChanged]);
+
+  const fixError = useCallback((messageId: string) => {
+    const ctx = messages.find(m => m.id === messageId)?.fixContext;
+    if (!ctx) return;
+    void startFix(ctx, messageId);
+  }, [messages, startFix]);
+
+  // Auto-fix entry for the code drawer's output tab — only the ACTIVE
+  // version's failures are fixable (the fix agent edits the active code)
+  const fixLastRun = useCallback(() => {
+    const run = lastRunResult;
+    if (!run || !run.error || run.version != null) return;
+    void startFix({
+      actionName: run.actionName,
+      actionIdentifier: run.actionIdentifier,
+      appId: run.appId,
+      errorText: run.error,
+      stdout: run.stdout || undefined,
+      inputs: run.inputs,
+      files: run.files,
+    }, null);
+  }, [lastRunResult, startFix]);
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

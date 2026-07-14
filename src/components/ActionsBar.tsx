@@ -2,8 +2,20 @@ import { useState, useMemo, useRef } from 'react';
 import { IconPlayerPlay, IconCode, IconTrash, IconFile, IconFileTypePdf, IconPhoto, IconDownload, IconBolt, IconChevronLeft, IconChevronRight, IconArrowsSort, IconChevronDown, IconLoader2 } from '@tabler/icons-react';
 import { useActions } from '@/context/ActionsContext';
 import type { Action, FileAttachment } from '@/lib/actions-agent';
-import { format, parseISO } from 'date-fns';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
+
+const ORIGIN_LABELS: Record<string, string> = {
+  fix: 'Auto-Fix',
+  chat: 'Chat',
+  initial: 'Erstellt',
+  revert: 'Wiederhergestellt',
+};
+
+function relTime(d?: string) {
+  if (!d) return '';
+  try { return formatDistanceToNow(parseISO(d), { addSuffix: true, locale: de }); } catch { return d; }
+}
 
 function FileIcon({ mimeType }: { mimeType: string }) {
   if (mimeType === 'application/pdf') return <IconFileTypePdf size={14} className="shrink-0 text-red-500" />;
@@ -157,11 +169,12 @@ function FileList({ files, onDownload, onDelete }: { files: FileAttachment[]; on
   );
 }
 
-function ActionWidget({ action, files, onRun, onShowCode, onDelete, onDownload, onDeleteFile, devMode, running, disabled }: {
+function ActionWidget({ action, files, onRun, onShowCode, onShowChanges, onDelete, onDownload, onDeleteFile, devMode, running, disabled }: {
   action: Action;
   files: FileAttachment[];
   onRun: (action: Action) => void;
   onShowCode: (action: Action) => void;
+  onShowChanges: (action: Action) => void;
   onDelete: (action: Action) => Promise<void>;
   onDownload: (url: string, filename: string) => void;
   onDeleteFile: (file: FileAttachment) => void;
@@ -171,6 +184,7 @@ function ActionWidget({ action, files, onRun, onShowCode, onDelete, onDownload, 
 }) {
   const [expanded, setExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const latest = action.versions.length > 0 ? action.versions[action.versions.length - 1] : null;
 
   const toggle = () => {
     if (expanded && contentRef.current) contentRef.current.style.overflow = 'hidden';
@@ -210,10 +224,11 @@ function ActionWidget({ action, files, onRun, onShowCode, onDelete, onDownload, 
               {devMode && (
                 <button
                   onClick={() => onShowCode(action)}
-                  className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-primary/10 text-primary transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
                   title="Quellcode"
                 >
-                  <IconCode size={16} />
+                  <IconCode size={14} />
+                  Code
                 </button>
               )}
               <button
@@ -224,6 +239,17 @@ function ActionWidget({ action, files, onRun, onShowCode, onDelete, onDownload, 
                 <IconTrash size={16} />
               </button>
             </div>
+            {devMode && latest && action.current_version > 0 && (
+              <button
+                onClick={() => onShowChanges(action)}
+                className="mt-2 block w-full truncate text-left text-[11px] text-muted-foreground hover:text-foreground hover:underline underline-offset-2 transition-colors"
+                title="Änderungen ansehen"
+              >
+                <span className="font-semibold text-foreground">v{action.current_version}</span>
+                {' · '}{ORIGIN_LABELS[latest.origin] || latest.origin}{' · '}{relTime(latest.ts)}
+                {latest.summary ? ` — ${latest.summary}` : ''}
+              </button>
+            )}
             {files.length > 0 && (
               <FileList files={files} onDownload={onDownload} onDelete={onDeleteFile} />
             )}
@@ -272,7 +298,10 @@ function FilesWidget({ files, onDownload, onDeleteFile, label }: { files: FileAt
 }
 
 export default function ActionsBar() {
-  const { actions, runAction, showActionCode, deleteAction, deleteAppAttachment, devMode, runningActionId, files, filesByAction, downloadFile } = useActions();
+  const { actions, runAction, showActionCode, openCodeDrawer, deleteAction, deleteAppAttachment, devMode, runningActionId, files, filesByAction, downloadFile } = useActions();
+
+  // Version line → drawer, focused on the latest change's diff
+  const showChanges = (a: Action) => openCodeDrawer(a, { version: a.current_version, tab: 'diff' });
 
   const unassignedFiles = filesByAction['__unassigned__'] || [];
 
@@ -287,6 +316,7 @@ export default function ActionsBar() {
           files={filesByAction[a.identifier] || []}
           onRun={runAction}
           onShowCode={showActionCode}
+          onShowChanges={showChanges}
           onDelete={deleteAction}
           onDownload={(url, filename) => { void downloadFile(url, filename); }}
           onDeleteFile={(f) => { void deleteAppAttachment(f); }}
