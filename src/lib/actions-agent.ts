@@ -264,6 +264,9 @@ export interface ChatSessionMeta {
   mine?: boolean;
   user?: { id?: string; name?: string; initials?: string };
   action?: ChatSessionAction;
+  // Rolling AI teaser (backend-generated, absent on old backends/entries);
+  // display falls back to the raw title/preview when missing
+  ai?: { title?: string; summary?: string; emoji?: string; msg_count?: number; ts?: string };
 }
 
 // Persisted message — a sanitized projection of the UI Message type.

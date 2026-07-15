@@ -309,6 +309,16 @@ const ORIGIN_LABELS: Record<string, string> = {
 // history view and the code drawer's dock popover
 // ---------------------------------------------------------------------------
 
+// Titles/previews are single-line plain text — the backend stores them
+// stripped, but entries persisted before that (or by older backends) may
+// still carry raw markdown, so rendering strips again.
+function stripMd(text: string): string {
+  return (text || '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|`{1,3}|~~)/g, '')
+    .replace(/^[#>\s]+/, '');
+}
+
 function sessionGroup(iso: string): 'today' | 'yesterday' | 'older' {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return 'older';
@@ -350,7 +360,7 @@ export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
   const visible = chatSessions.filter(s => {
     if (filterAction && !(s.action && s.action.app_id === filterAction.appId && s.action.identifier === filterAction.identifier)) return false;
     if (!q) return true;
-    return (s.title || '').toLowerCase().includes(q) || (s.preview || '').toLowerCase().includes(q);
+    return `${s.title || ''} ${s.preview || ''} ${s.ai?.title || ''} ${s.ai?.summary || ''}`.toLowerCase().includes(q);
   });
 
   // Sessions arrive newest first — group consecutively by day bucket
@@ -395,14 +405,15 @@ export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
                   className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${s.id === activeThreadId ? 'bg-accent' : 'hover:bg-muted/60'}`}
                 >
                   <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${s.id === activeThreadId ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                    {s.origin === 'fix' ? <IconWand size={14} /> : s.action ? <IconCode size={14} /> : <IconMessageCircle size={14} />}
+                    {/* fix/tool keep their semantic icons; plain chats get the AI topic emoji */}
+                    {s.origin === 'fix' ? <IconWand size={14} /> : s.action ? <IconCode size={14} /> : s.ai?.emoji ? <span className="text-[13px] leading-none">{s.ai.emoji}</span> : <IconMessageCircle size={14} />}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{s.title || 'Assistent'}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{stripMd(s.ai?.title || s.title) || 'Assistent'}</span>
                       <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{sessionTime(s.updated_at || s.created_at)}</span>
                     </span>
-                    {s.preview && <span className="mt-0.5 block truncate text-xs text-muted-foreground">{s.preview}</span>}
+                    {(s.ai?.summary || s.preview) && <span className="mt-0.5 block truncate text-xs text-muted-foreground">{stripMd(s.ai?.summary || s.preview)}</span>}
                     {(s.id === activeThreadId || s.origin === 'fix' || !!s.action || (!!s.user?.initials && !s.mine)) && (
                       <span className="mt-1 flex flex-wrap items-center gap-1">
                         {s.id === activeThreadId && (
@@ -526,8 +537,12 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
                     onClick={() => void loadChatSession(s.id)}
                     className="mb-1.5 flex w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/50"
                   >
-                    <IconHistory size={13} className="shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
+                    {s.ai?.emoji ? (
+                      <span className="shrink-0 text-[12px] leading-none">{s.ai.emoji}</span>
+                    ) : (
+                      <IconHistory size={13} className="shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-left">{stripMd(s.ai?.title || s.title)}</span>
                     <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{sessionTime(s.updated_at || s.created_at)}</span>
                   </button>
                 ))}
@@ -779,23 +794,23 @@ export default function ChatWidget() {
             )}
             <div className="flex items-center gap-0.5 shrink-0">
               {view === 'chat' && (
-                <>
-                  <button
-                    onClick={() => setView('history')}
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                    title="Verlauf"
-                  >
-                    <IconHistory size={14} />
-                  </button>
-                  <button
-                    onClick={() => { newChatSession(); setView('chat'); }}
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                    title="Neuer Chat"
-                  >
-                    <IconMessagePlus size={14} />
-                  </button>
-                </>
+                <button
+                  onClick={() => setView('history')}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Verlauf"
+                >
+                  <IconHistory size={14} />
+                </button>
               )}
+              {/* New chat is reachable from BOTH views — from the history it
+                  starts fresh and returns to the conversation */}
+              <button
+                onClick={() => { newChatSession(); setView('chat'); }}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                title="Neuer Chat"
+              >
+                <IconMessagePlus size={14} />
+              </button>
               <button
                 onClick={() => setIsFullscreen(!isFullscreen)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
