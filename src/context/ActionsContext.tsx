@@ -80,6 +80,7 @@ interface ActionsContextType {
   openCodeDrawerFor: (appId: string, identifier: string, focus?: CodeDrawerFocus) => void;
   closeCodeDrawer: () => void;
   backToActions: () => void;
+  reportCodeDrawerSelection: (sel: { version: number; current_version: number } | null) => void;
   actionsHighlight: { appId: string; identifier: string } | null;
   revertActionVersion: (appId: string, identifier: string, to: number, expectedCurrent?: number) => Promise<void>;
   deleteAction: (action: Action) => Promise<void>;
@@ -89,6 +90,7 @@ interface ActionsContextType {
   cancelInputForm: () => void;
   files: FileAttachment[];
   filesByAction: Record<string, FileAttachment[]>;
+  freshFileIds: Set<string>;
   downloadFile: (url: string, filename: string) => Promise<void>;
   deleteAppAttachment: (file: FileAttachment) => Promise<void>;
 }
@@ -136,6 +138,10 @@ export function useActions() {
 export function ActionsProvider({ children }: { children: ReactNode }) {
   const [actions, setActions] = useState<Action[]>([]);
   const [files, setFiles] = useState<FileAttachment[]>([]);
+  // `${app_id}/${identifier}` of files that appeared in the last refresh;
+  // null until the first successful fetch (its files are not "new")
+  const knownFileIdsRef = useRef<Set<string> | null>(null);
+  const [freshFileIds, setFreshFileIds] = useState<Set<string>>(() => new Set());
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -153,6 +159,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     for (const f of files) {
       const key = f.action_identifier || '__unassigned__';
       (map[key] ??= []).push(f);
+    }
+    // Newest first — a fresh run's output lands on top where the user looks
+    for (const list of Object.values(map)) {
+      list.sort((a, b) => b.created_at.localeCompare(a.created_at) || a.filename.localeCompare(b.filename));
     }
     return map;
   }, [files]);
@@ -179,6 +189,16 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       const result = await fetchActionsAndFiles();
       setActions(result.actions);
       setFiles(result.files);
+      // Files that appeared since the previous fetch: the drawer expands the
+      // owning card's file list and fades a highlight on the new rows. The
+      // null ref skips the initial load — nothing is "new" then.
+      const ids = new Set(result.files.map(f => `${f.app_id}/${f.identifier}`));
+      const known = knownFileIdsRef.current;
+      knownFileIdsRef.current = ids;
+      if (known) {
+        const added = result.files.filter(f => !known.has(`${f.app_id}/${f.identifier}`));
+        if (added.length) setFreshFileIds(new Set(added.map(f => `${f.app_id}/${f.identifier}`)));
+      }
     } catch {
       // silently ignore — actions panel will be empty
     }
@@ -199,6 +219,13 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     const t = setTimeout(() => setActionsHighlight(null), 1600);
     return () => clearTimeout(t);
   }, [actionsHighlight]);
+
+  // Drop the new-file marks once their fade-out animation has finished
+  useEffect(() => {
+    if (!freshFileIds.size) return;
+    const t = setTimeout(() => setFreshFileIds(new Set()), 4500);
+    return () => clearTimeout(t);
+  }, [freshFileIds]);
 
   const openActionsDrawer = useCallback(() => setActionsDrawerOpen(true), []);
   const closeActionsDrawer = useCallback(() => setActionsDrawerOpen(false), []);
@@ -346,7 +373,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
             ]);
             return;
           }
@@ -413,6 +440,13 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   const [codeDrawerAction, setCodeDrawerAction] = useState<Action | null>(null);
   const [codeDrawerFocus, setCodeDrawerFocus] = useState<CodeDrawerFocus | null>(null);
+  // The drawer's live timeline selection, mirrored here so sendMessage can
+  // tell the agent which version is on screen. A ref (not state): read only
+  // at send time, must not re-render the provider on every timeline click.
+  const codeDrawerSelectionRef = useRef<{ version: number; current_version: number } | null>(null);
+  const reportCodeDrawerSelection = useCallback((sel: { version: number; current_version: number } | null) => {
+    codeDrawerSelectionRef.current = sel;
+  }, []);
 
   const openCodeDrawer = useCallback((action: Action, focus?: CodeDrawerFocus) => {
     // The Werkzeuge overview (if open) stays mounted beneath — the code
@@ -578,7 +612,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       }, {
         // Docked to the code drawer: the agent resolves "the code" to it
         activeAction: codeDrawerAction
-          ? { app_id: codeDrawerAction.app_id, identifier: codeDrawerAction.identifier }
+          ? {
+              app_id: codeDrawerAction.app_id,
+              identifier: codeDrawerAction.identifier,
+              ...(codeDrawerSelectionRef.current ?? {}),
+            }
           : undefined,
         onCodeChanged: handleCodeChanged,
       });
@@ -704,7 +742,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   IconX, IconCode, IconChevronDown, IconHistory, IconMessageCircle,
   IconChevronUp, IconRestore, IconPlayerPlay, IconWand, IconExternalLink,
-  IconArrowLeft, IconBolt,
+  IconArrowLeft, IconBolt, IconLoader2,
 } from '@tabler/icons-react';
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
@@ -118,6 +118,7 @@ export function ActionCodeDrawer() {
     codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion,
     chatLoading, runAction, runningActionId, lastRunResult, fixLastRun, downloadFile,
     actions, openCodeDrawer, backToActions, closeActionsDrawer, actionsDrawerOpen,
+    reportCodeDrawerSelection,
   } = useActions();
 
   const [versions, setVersions] = useState<ActionVersion[] | null>(null);
@@ -181,6 +182,14 @@ export function ActionCodeDrawer() {
     return () => window.removeEventListener('action-code-changed', handler);
   }, [action]);
 
+  // Mirror the timeline selection into the context — sendMessage passes it
+  // to the agent as part of active_action ("the user is looking at v3").
+  useEffect(() => {
+    if (!action || selected <= 0) return;
+    reportCodeDrawerSelection({ version: selected, current_version: current });
+    return () => reportCodeDrawerSelection(null);
+  }, [action, selected, current, reportCodeDrawerSelection]);
+
   // While the agent works, surface the conversation in the dock
   useEffect(() => {
     if (chatLoading) setDockOpen(true);
@@ -226,6 +235,7 @@ export function ActionCodeDrawer() {
   );
 
   const isOld = selectedEntry !== null && selected !== current;
+  const isRunning = runningActionId === action?.identifier;
   const { artifacts, rest } = useMemo(
     () => (run && !run.error ? splitRunOutput(run.stdout) : { artifacts: [], rest: null }),
     [run],
@@ -512,8 +522,8 @@ export function ActionCodeDrawer() {
                 onClick={() => runAction(action, isOld ? selected : undefined, { silent: true })}
                 className="inline-flex min-h-[2.25rem] items-center gap-1.5 rounded-full bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                <IconPlayerPlay size={14} />
-                {isOld ? `v${selected} testen` : 'Ausführen'}
+                {isRunning ? <IconLoader2 size={14} className="animate-spin" /> : <IconPlayerPlay size={14} />}
+                {isRunning ? 'In Arbeit...' : isOld ? `v${selected} testen` : 'Ausführen'}
               </button>
             </div>
 

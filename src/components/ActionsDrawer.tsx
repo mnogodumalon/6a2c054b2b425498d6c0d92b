@@ -43,13 +43,14 @@ function formatDateTime(d?: string) {
   try { return format(parseISO(d), 'dd.MM.yyyy, HH:mm', { locale: de }); } catch { return d; }
 }
 
-function FileItem({ file, onDownload, onDelete }: {
+function FileItem({ file, fresh, onDownload, onDelete }: {
   file: FileAttachment;
+  fresh?: boolean;
   onDownload: (url: string, filename: string) => void;
   onDelete: (file: FileAttachment) => void;
 }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-accent/50 transition-colors">
+    <li className={`flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-accent/50 transition-colors${fresh ? ' animate-[file-new_4s_ease-out]' : ''}`}>
       <FileIcon mimeType={file.mime_type} />
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{file.filename}</div>
@@ -80,6 +81,7 @@ function FileItem({ file, onDownload, onDelete }: {
 interface ActionRowProps {
   action: Action;
   files: FileAttachment[];
+  freshFileIds: Set<string>;
   running: boolean;
   disabled: boolean;
   devMode: boolean;
@@ -93,11 +95,17 @@ interface ActionRowProps {
 }
 
 function ActionRow({
-  action, files, running, disabled, devMode, highlight,
+  action, files, freshFileIds, running, disabled, devMode, highlight,
   onRun, onDelete, onShowCode, onShowChanges, onDownload, onDeleteFile,
 }: ActionRowProps) {
   const [filesOpen, setFilesOpen] = useState(false);
   const latest = action.versions.length > 0 ? action.versions[action.versions.length - 1] : null;
+
+  // A run just produced new files: open the list so the highlight is seen
+  const hasFreshFiles = files.some(f => freshFileIds.has(`${f.app_id}/${f.identifier}`));
+  useEffect(() => {
+    if (hasFreshFiles) setFilesOpen(true);
+  }, [hasFreshFiles]);
 
   return (
     <div className={`rounded-2xl border bg-card shadow-sm overflow-hidden${highlight ? ' animate-[action-return_1.4s_ease-out]' : ''}`}>
@@ -181,7 +189,7 @@ function ActionRow({
       {filesOpen && files.length > 0 && (
         <ul className="border-t bg-muted/20 py-1 px-1">
           {files.map((f, idx) => (
-            <FileItem key={`${f.url}-${idx}`} file={f} onDownload={onDownload} onDelete={onDeleteFile} />
+            <FileItem key={`${f.url}-${idx}`} file={f} fresh={freshFileIds.has(`${f.app_id}/${f.identifier}`)} onDownload={onDownload} onDelete={onDeleteFile} />
           ))}
         </ul>
       )}
@@ -197,7 +205,7 @@ interface ActionsDrawerProps {
 export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
   const {
     actions, runAction, deleteAction, showActionCode, openCodeDrawer, deleteAppAttachment,
-    devMode, runningActionId, filesByAction, downloadFile, setChatOpen,
+    devMode, runningActionId, filesByAction, freshFileIds, downloadFile, setChatOpen,
     codeDrawerAction, actionsHighlight,
   } = useActions();
 
@@ -279,6 +287,7 @@ export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
                   key={`${a.app_id}/${a.identifier}`}
                   action={a}
                   files={filesByAction[a.identifier] || []}
+                  freshFileIds={freshFileIds}
                   running={runningActionId === a.identifier}
                   disabled={runningActionId !== null}
                   devMode={devMode}
@@ -304,7 +313,7 @@ export function ActionsDrawer({ open, onClose }: ActionsDrawerProps) {
                   </div>
                   <ul className="border-t bg-muted/20 py-1 px-1">
                     {unassigned.map((f, idx) => (
-                      <FileItem key={`${f.url}-${idx}`} file={f} onDownload={handleDownload} onDelete={handleDeleteFile} />
+                      <FileItem key={`${f.url}-${idx}`} file={f} fresh={freshFileIds.has(`${f.app_id}/${f.identifier}`)} onDownload={handleDownload} onDelete={handleDeleteFile} />
                     ))}
                   </ul>
                 </div>

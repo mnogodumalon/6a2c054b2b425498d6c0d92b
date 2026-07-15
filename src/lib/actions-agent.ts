@@ -299,8 +299,9 @@ export async function agentChat(
   onFixResult?: (result: FixResultEvent) => void,
   opts?: {
     // Set while the chat is docked to an action's code view — the agent
-    // resolves "the code" / "this action" to it.
-    activeAction?: { app_id: string; identifier: string };
+    // resolves "the code" / "this action" to it. version/current_version
+    // tell it which timeline entry is on screen.
+    activeAction?: { app_id: string; identifier: string; version?: number; current_version?: number };
     onCodeChanged?: (event: ActionCodeChangedEvent) => void;
   },
 ): Promise<void> {
