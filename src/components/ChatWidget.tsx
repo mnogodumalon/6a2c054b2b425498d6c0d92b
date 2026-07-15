@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit } from '@tabler/icons-react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
 import { highlightPython, CopyButton } from '@/lib/highlight';
 import { useActions } from '@/context/ActionsContext';
+import type { ChatSessionMeta } from '@/lib/actions-agent';
 
 // ---------------------------------------------------------------------------
 // Lightweight Markdown renderer (no external deps)
@@ -304,13 +305,156 @@ const ORIGIN_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Chat history — session helpers + the list shared by the floating widget's
+// history view and the code drawer's dock popover
+// ---------------------------------------------------------------------------
+
+function sessionGroup(iso: string): 'today' | 'yesterday' | 'older' {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'older';
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = startOfDay(new Date()) - startOfDay(d);
+  if (diff <= 0) return 'today';
+  if (diff <= 86400000) return 'yesterday';
+  return 'older';
+}
+
+function sessionTime(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+}
+
+const GROUP_LABELS: Record<'today' | 'yesterday' | 'older', string> = {
+  today: 'Heute',
+  yesterday: 'Gestern',
+  older: 'Älter',
+};
+
+export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
+  // Only sessions bound to this Werkzeug (the code drawer's filter)
+  filterAction?: { appId: string; identifier: string } | null;
+  onSelect?: () => void;
+  compact?: boolean;
+}) {
+  const { chatSessions, activeThreadId, loadChatSession, deleteChatSession, refreshChatSessions } = useActions();
+  const [query, setQuery] = useState('');
+  // Two-step delete: the first tap arms the trash, the second deletes
+  const [armedDelete, setArmedDelete] = useState<string | null>(null);
+
+  useEffect(() => { void refreshChatSessions(); }, [refreshChatSessions]);
+
+  const q = query.trim().toLowerCase();
+  const visible = chatSessions.filter(s => {
+    if (filterAction && !(s.action && s.action.app_id === filterAction.appId && s.action.identifier === filterAction.identifier)) return false;
+    if (!q) return true;
+    return (s.title || '').toLowerCase().includes(q) || (s.preview || '').toLowerCase().includes(q);
+  });
+
+  // Sessions arrive newest first — group consecutively by day bucket
+  const groups: Array<{ key: 'today' | 'yesterday' | 'older'; sessions: ChatSessionMeta[] }> = [];
+  for (const s of visible) {
+    const key = sessionGroup(s.updated_at || s.created_at);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.sessions.push(s);
+    else groups.push({ key, sessions: [s] });
+  }
+
+  return (
+    <>
+      {!compact && chatSessions.length > 4 && (
+        <div className="px-3 pt-2.5 pb-1 shrink-0">
+          <div className="flex items-center gap-2 rounded-xl border border-input bg-card px-2.5 py-1.5">
+            <IconSearch size={13} className="shrink-0 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Verlauf durchsuchen…"
+              className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+            />
+          </div>
+        </div>
+      )}
+      <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {visible.length === 0 && (
+          <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-muted-foreground">
+            <IconHistory size={24} stroke={1.5} />
+            <p className="text-xs">Noch keine Unterhaltungen</p>
+          </div>
+        )}
+        {groups.map(group => (
+          <div key={`${group.key}-${group.sessions[0].id}`}>
+            <p className="px-2.5 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">{GROUP_LABELS[group.key]}</p>
+            {group.sessions.map(s => (
+              <div key={s.id} className="group relative">
+                <button
+                  type="button"
+                  onClick={() => { void loadChatSession(s.id); onSelect?.(); }}
+                  className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${s.id === activeThreadId ? 'bg-accent' : 'hover:bg-muted/60'}`}
+                >
+                  <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${s.id === activeThreadId ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                    {s.origin === 'fix' ? <IconWand size={14} /> : s.action ? <IconCode size={14} /> : <IconMessageCircle size={14} />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{s.title || 'Assistent'}</span>
+                      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{sessionTime(s.updated_at || s.created_at)}</span>
+                    </span>
+                    {s.preview && <span className="mt-0.5 block truncate text-xs text-muted-foreground">{s.preview}</span>}
+                    {(s.id === activeThreadId || s.origin === 'fix' || !!s.action || (!!s.user?.initials && !s.mine)) && (
+                      <span className="mt-1 flex flex-wrap items-center gap-1">
+                        {s.id === activeThreadId && (
+                          <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-1.5 py-px text-[10px] font-semibold text-green-700">Aktiv</span>
+                        )}
+                        {s.origin === 'fix' && (
+                          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] font-semibold text-amber-700">Auto-Fix</span>
+                        )}
+                        {s.action && (
+                          <span className="inline-flex max-w-[11rem] items-center gap-1 truncate rounded-full border border-[#bfdbfe] bg-secondary px-1.5 py-px text-[10px] font-semibold text-[#2563eb]">
+                            <IconCode size={10} className="shrink-0" />
+                            <span className="truncate">{s.action.title || s.action.identifier}</span>
+                          </span>
+                        )}
+                        {s.user?.initials && !s.mine && (
+                          <span title={s.user.name} className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#bfdbfe] bg-secondary text-[8px] font-bold text-[#2563eb]">{s.user.initials}</span>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (armedDelete === s.id) { void deleteChatSession(s.id); setArmedDelete(null); }
+                    else setArmedDelete(s.id);
+                  }}
+                  onBlur={() => setArmedDelete(null)}
+                  title="Sitzung löschen?"
+                  className={`absolute right-2 top-2 items-center justify-center rounded-md border border-border bg-card p-1.5 shadow-sm transition-colors ${
+                    armedDelete === s.id ? 'flex text-destructive' : 'hidden text-muted-foreground hover:text-destructive group-hover:flex'
+                  }`}
+                >
+                  {armedDelete === s.id ? <span className="px-0.5 text-[11px] font-semibold">Löschen?</span> : <IconTrash size={13} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ChatPanel — message list + attachment preview + composer. Rendered by the
 // floating ChatWidget AND docked inside the action code drawer; both surfaces
 // show the SAME conversation from ActionsContext. Parent must be flex-col.
 // ---------------------------------------------------------------------------
 
 export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...', autoFocus = false, collapsed = false }: { placeholder?: string; autoFocus?: boolean; collapsed?: boolean }) {
-  const { messages, chatLoading, runningActionId, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion } = useActions();
+  const { messages, chatLoading, runningActionId, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion, chatSessions, activeThreadId, loadChatSession, resumedSessionAt } = useActions();
   const [input, setInput] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -372,6 +516,32 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
           <div className="flex flex-col items-center justify-center h-full text-center gap-2 text-muted-foreground">
             <IconSparkles size={28} stroke={1.5} />
             <p className="text-xs">{placeholder}</p>
+            {chatSessions.filter(s => s.id !== activeThreadId).length > 0 && (
+              <div className="mt-3 w-full max-w-[260px] text-left">
+                <p className="mb-1.5 px-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">Zuletzt</p>
+                {chatSessions.filter(s => s.id !== activeThreadId).slice(0, 2).map(s => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => void loadChatSession(s.id)}
+                    className="mb-1.5 flex w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/50"
+                  >
+                    <IconHistory size={13} className="shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{sessionTime(s.updated_at || s.created_at)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {resumedSessionAt !== null && messages.length > 0 && (
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            <span className="shrink-0">
+              Sitzung fortgesetzt{sessionTime(resumedSessionAt) ? ` · ${sessionTime(resumedSessionAt)}` : ''}
+            </span>
+            <span className="h-px flex-1 bg-border" />
           </div>
         )}
         {messages.map((m) => (
@@ -396,6 +566,14 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
                     <img src={m.image} alt="" className="max-w-full max-h-32 rounded-lg mb-2" />
                   );
                 })()}
+                {/* Restored sessions keep only the attachment's name — the
+                    data URI never persists, so a chip stands in for it */}
+                {!m.image && m.imageName && (
+                  <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-black/10">
+                    <IconPaperclip size={14} />
+                    <span className="text-xs font-medium truncate max-w-[200px]">{m.imageName}</span>
+                  </div>
+                )}
                 {m.content === 'In Arbeit...' ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
                     <IconLoader2 size={14} className="animate-spin" />
@@ -536,11 +714,17 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
 // ---------------------------------------------------------------------------
 
 export default function ChatWidget() {
-  const { chatOpen, setChatOpen, codeDrawerAction } = useActions();
+  const { chatOpen, setChatOpen, codeDrawerAction, newChatSession } = useActions();
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // 'history' swaps the panel body for the session list — same surface,
+  // no second panel, back arrow returns to the conversation
+  const [view, setView] = useState<'chat' | 'history'>('chat');
 
   useEffect(() => {
-    if (!chatOpen) setIsFullscreen(false);
+    if (!chatOpen) {
+      setIsFullscreen(false);
+      setView('chat');
+    }
   }, [chatOpen]);
 
   // While the code drawer is open, its chat dock is the single chat surface —
@@ -574,13 +758,44 @@ export default function ChatWidget() {
         }`}>
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                <IconSparkles size={12} className="text-primary" />
+            {view === 'history' ? (
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  onClick={() => setView('chat')}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Assistent"
+                >
+                  <IconArrowLeft size={14} />
+                </button>
+                <span className="text-sm font-semibold text-foreground truncate">Verlauf</span>
               </div>
-              <span className="text-sm font-semibold text-foreground truncate">Assistent</span>
-            </div>
+            ) : (
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <IconSparkles size={12} className="text-primary" />
+                </div>
+                <span className="text-sm font-semibold text-foreground truncate">Assistent</span>
+              </div>
+            )}
             <div className="flex items-center gap-0.5 shrink-0">
+              {view === 'chat' && (
+                <>
+                  <button
+                    onClick={() => setView('history')}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    title="Verlauf"
+                  >
+                    <IconHistory size={14} />
+                  </button>
+                  <button
+                    onClick={() => { newChatSession(); setView('chat'); }}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    title="Neuer Chat"
+                  >
+                    <IconMessagePlus size={14} />
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setIsFullscreen(!isFullscreen)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -597,7 +812,11 @@ export default function ChatWidget() {
             </div>
           </div>
 
-          <ChatPanel autoFocus={chatOpen} />
+          {view === 'history' ? (
+            <ChatHistoryList onSelect={() => setView('chat')} />
+          ) : (
+            <ChatPanel autoFocus={chatOpen} />
+          )}
         </div>
       )}
     </>
