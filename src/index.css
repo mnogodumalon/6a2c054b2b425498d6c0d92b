@@ -178,11 +178,11 @@
   }
 }
 
-/* A file row that just appeared (action output): faint orange wash that
- * holds briefly, then fades. Applied via animate-[file-new_4s_ease-out]. */
+/* A file row that just appeared (action output): orange wash that holds
+ * briefly, then fades. Applied via animate-[file-new_4s_ease-out]. */
 @keyframes file-new {
   0%, 35% {
-    background-color: color-mix(in srgb, var(--primary) 12%, transparent);
+    background-color: color-mix(in srgb, var(--primary) 25%, transparent);
   }
   100% {
     background-color: transparent;
