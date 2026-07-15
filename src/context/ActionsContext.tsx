@@ -197,7 +197,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       knownFileIdsRef.current = ids;
       if (known) {
         const added = result.files.filter(f => !known.has(`${f.app_id}/${f.identifier}`));
-        if (added.length) setFreshFileIds(new Set(added.map(f => `${f.app_id}/${f.identifier}`)));
+        if (added.length) {
+          console.debug('[actions] new files:', added.map(f => f.filename));
+          setFreshFileIds(prev => new Set([...prev, ...added.map(f => `${f.app_id}/${f.identifier}`)]));
+        }
       }
     } catch {
       // silently ignore — actions panel will be empty
@@ -220,10 +223,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [actionsHighlight]);
 
-  // Drop the new-file marks once their fade-out animation has finished
+  // Drop the new-file marks after a viewing window — the rows are tinted
+  // as long as their id is in the set; removal fades via transition-colors
   useEffect(() => {
     if (!freshFileIds.size) return;
-    const t = setTimeout(() => setFreshFileIds(new Set()), 4500);
+    const t = setTimeout(() => setFreshFileIds(new Set()), 4000);
     return () => clearTimeout(t);
   }, [freshFileIds]);
 
