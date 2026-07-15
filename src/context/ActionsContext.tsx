@@ -138,9 +138,10 @@ export function useActions() {
 export function ActionsProvider({ children }: { children: ReactNode }) {
   const [actions, setActions] = useState<Action[]>([]);
   const [files, setFiles] = useState<FileAttachment[]>([]);
-  // `${app_id}/${identifier}` of files that appeared in the last refresh;
-  // null until the first successful fetch (its files are not "new")
-  const knownFileIdsRef = useRef<Set<string> | null>(null);
+  // `${app_id}/${identifier}` → content signature of every file in the last
+  // fetch; null until the first successful fetch (its files are not "new").
+  // freshFileIds marks the rows to tint: new ids or replaced files.
+  const knownFilesRef = useRef<Map<string, string> | null>(null);
   const [freshFileIds, setFreshFileIds] = useState<Set<string>>(() => new Set());
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -189,14 +190,18 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       const result = await fetchActionsAndFiles();
       setActions(result.actions);
       setFiles(result.files);
-      // Files that appeared since the previous fetch: the drawer expands the
-      // owning card's file list and fades a highlight on the new rows. The
-      // null ref skips the initial load — nothing is "new" then.
-      const ids = new Set(result.files.map(f => `${f.app_id}/${f.identifier}`));
-      const known = knownFileIdsRef.current;
-      knownFileIdsRef.current = ids;
+      // Files that appeared or were replaced since the previous fetch: the
+      // drawer expands the owning card's file list and tints those rows. An
+      // action that overwrites its single output file yields no new id —
+      // the signature catches that case. The null ref skips the initial
+      // load — nothing is "new" then.
+      const sig = (f: FileAttachment) => `${f.created_at}|${f.url}|${f.filename}`;
+      const current = new Map<string, string>();
+      for (const f of result.files) current.set(`${f.app_id}/${f.identifier}`, sig(f));
+      const known = knownFilesRef.current;
+      knownFilesRef.current = current;
       if (known) {
-        const added = result.files.filter(f => !known.has(`${f.app_id}/${f.identifier}`));
+        const added = result.files.filter(f => known.get(`${f.app_id}/${f.identifier}`) !== sig(f));
         if (added.length) {
           console.debug('[actions] new files:', added.map(f => f.filename));
           setFreshFileIds(prev => new Set([...prev, ...added.map(f => `${f.app_id}/${f.identifier}`)]));

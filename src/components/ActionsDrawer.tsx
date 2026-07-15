@@ -50,7 +50,7 @@ function FileItem({ file, fresh, onDownload, onDelete }: {
   onDelete: (file: FileAttachment) => void;
 }) {
   return (
-    <li className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors duration-500 ${fresh ? 'bg-primary/25' : 'hover:bg-accent/50'}`}>
+    <li className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors duration-500 ${fresh ? 'bg-primary/15' : 'hover:bg-accent/50'}`}>
       <FileIcon mimeType={file.mime_type} />
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{file.filename}</div>
