@@ -200,7 +200,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [runningActionId, setRunningActionId] = useState<string | null>(null);
-  const [threadId, setThreadId] = useState(() => crypto.randomUUID());
+  const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
   const [fixingMessageId, setFixingMessageId] = useState<string | null>(null);
   const chatLoadingRef = useRef(false);
   const [inputFormAction, setInputFormAction] = useState<Action | null>(null);
@@ -370,8 +370,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       if (t.action) sessionActionRef.current = t.action;
       if (t.origin === 'fix') sessionOriginRef.current = 'fix';
       skipDirtyRef.current = true;
-      setThreadId(initialResumeId as ReturnType<typeof crypto.randomUUID>);
-      threadIdRef.current = initialResumeId as ReturnType<typeof crypto.randomUUID>;
+      setThreadId(initialResumeId);
+      threadIdRef.current = initialResumeId;
       setMessages(prev => (prev.length ? prev : restored));
       setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
     });
@@ -389,8 +389,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     sessionOriginRef.current = t.origin === 'fix' ? 'fix' : 'chat';
     chatDirtyRef.current = false;
     skipDirtyRef.current = true;
-    setThreadId(id as ReturnType<typeof crypto.randomUUID>);
-    threadIdRef.current = id as ReturnType<typeof crypto.randomUUID>;
+    setThreadId(id);
+    threadIdRef.current = id;
     setMessages(deserializeMessages(t.messages));
     setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
   }, [persistChat]);

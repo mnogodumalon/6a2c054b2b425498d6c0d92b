@@ -20,7 +20,7 @@ const BUG_TYPES = new Set<string>([
 ]);
 
 type ErrorSource = 'api' | 'promise' | 'js' | 'network';
-type ErrorCategory = 'user' | 'bug' | 'transient';
+type ErrorCategory = 'user' | 'bug' | 'transient' | 'auth';
 
 export interface ErrorPayload {
   source: ErrorSource;
@@ -35,6 +35,9 @@ export interface ErrorPayload {
 }
 
 function classify(err: ErrorPayload): ErrorCategory {
+  // 401/403: the Layout login screen is the surface for this — a repair run
+  // cannot fix a missing session or missing permissions.
+  if (err.status === 401 || err.status === 403) return 'auth';
   if (err.source === 'network') return 'transient';
   if (typeof err.status === 'number' && err.status >= 500) return 'transient';
   if (err.type && USER_TYPES.has(err.type)) return 'user';
@@ -142,7 +145,7 @@ export function ErrorBusProvider({ children }: { children: ReactNode }) {
     seen.current.set(key, now);
 
     const category = classify(err);
-    if (category === 'user') return;
+    if (category === 'user' || category === 'auth') return;
 
     if (category === 'transient') {
       toast.error('Netzwerkfehler', {
