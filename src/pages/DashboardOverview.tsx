@@ -8,7 +8,7 @@ import { formatDate, formatDateTime, formatCurrency, lookupKey } from '@/lib/for
 import { useState, useMemo, useCallback } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { StatCard, StatCardRow } from '@/components/StatCard';
+
 import { DashboardGrid } from '@/components/DashboardGrid';
 import { WorkList } from '@/components/WorkList';
 import { HeroBanner } from '@/components/HeroBanner';
@@ -31,8 +31,8 @@ import { useClock, gruss, namen, ENTRANCE, entranceDelay, undoToast } from '@/li
 import { format, parseISO, isAfter, isBefore, startOfDay } from 'date-fns';
 import { de } from 'date-fns/locale';
 import {
-  IconAlertCircle, IconTool, IconRefresh, IconCheck, IconCash,
-  IconCalendarEvent, IconUsers, IconPlus, IconMoodHappy, IconBuildingCommunity,
+  IconAlertCircle, IconTool, IconRefresh, IconCheck,
+  IconCalendarEvent, IconPlus,
   IconClock,
 } from '@tabler/icons-react';
 import { IconAlertTriangle } from '@tabler/icons-react';
@@ -246,47 +246,6 @@ export default function DashboardOverview() {
 
       <DashboardGrid
         hero={heroBanner}
-        kpis={
-          <StatCardRow>
-            <StatCard
-              title="Aktive Mitglieder"
-              value={aktiveMitglieder.length}
-              description={aktiveMitglieder.length > 0 ? `${mitglieder.length} gesamt` : 'Noch keine aktiven Mitglieder'}
-              icon={<IconUsers size={18} className="text-muted-foreground" />}
-              tone="primary"
-            />
-            <StatCard
-              title="Offen"
-              value={offeneZahlungen.length}
-              description={offeneZahlungen.length > 0 ? 'Beiträge ausstehend' : 'Alles bezahlt'}
-              icon={<IconCash size={18} className="text-muted-foreground" />}
-              tone={offeneZahlungen.length > 0 ? 'warning' : 'default'}
-              onClick={() => setStatusFilter(f => f === 'offen' ? null : 'offen')}
-              active={statusFilter === 'offen'}
-            />
-            <StatCard
-              title="Gemahnt"
-              value={gemahnte.length}
-              description={gemahnte.length > 0 ? 'Sofort handeln' : 'Keine Mahnungen'}
-              icon={<IconAlertCircle size={18} className="text-muted-foreground" />}
-              tone={gemahnte.length > 0 ? 'destructive' : 'default'}
-              onClick={() => setStatusFilter(f => f === 'gemahnt' ? null : 'gemahnt')}
-              active={statusFilter === 'gemahnt'}
-            />
-            <StatCard
-              title="Nächste Veranstaltung"
-              value={naechsteVeranstaltungen.length > 0
-                ? (naechsteVeranstaltungen[0].fields.datum_uhrzeit
-                  ? format(parseISO(naechsteVeranstaltungen[0].fields.datum_uhrzeit), 'dd. MMM', { locale: de })
-                  : '—')
-                : '—'}
-              description={naechsteVeranstaltungen[0]?.fields.titel ?? 'Keine geplant'}
-              icon={<IconCalendarEvent size={18} className="text-muted-foreground" />}
-              tone="default"
-              onClick={() => naechsteVeranstaltungen[0] && overlay.push({ type: 'veranstaltung', id: naechsteVeranstaltungen[0].record_id })}
-            />
-          </StatCardRow>
-        }
         aside={
           <>
             {/* Upcoming events */}
