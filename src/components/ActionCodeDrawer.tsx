@@ -10,7 +10,7 @@ import { de } from 'date-fns/locale';
 import { useActions } from '@/context/ActionsContext';
 import { fetchActionHistory, type Action, type ActionVersion } from '@/lib/actions-agent';
 import { highlightPython, CopyButton, diffLines } from '@/lib/highlight';
-import { ChatPanel, JsonView } from '@/components/ChatWidget';
+import { ChatPanel, ChatHistoryList, JsonView } from '@/components/ChatWidget';
 
 const ORIGIN_LABELS: Record<string, string> = {
   fix: 'Auto-Fix',
@@ -128,8 +128,18 @@ export function ActionCodeDrawer() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [dockOpen, setDockOpen] = useState(false);
+  // History popover over the dock bar; the filter defaults to this Werkzeug
+  const [dockHistoryOpen, setDockHistoryOpen] = useState(false);
+  const [dockHistoryFilter, setDockHistoryFilter] = useState<'tool' | 'all'>('tool');
   const [restoring, setRestoring] = useState(false);
   const lastRunTsRef = useRef(0);
+
+  // The drawer stays mounted across opens — fold the popover away whenever
+  // it targets a different action (or none)
+  useEffect(() => {
+    setDockHistoryOpen(false);
+    setDockHistoryFilter('tool');
+  }, [action]);
 
   // The latest execution of THIS action (feeds the output tab)
   const run = action && lastRunResult
@@ -681,17 +691,54 @@ export function ActionCodeDrawer() {
         </div>
 
         {/* Chat dock — the SAME conversation as the floating chat widget */}
-        <div className={`shrink-0 border-t border-border bg-card flex flex-col ${dockOpen ? 'h-[45dvh] min-h-[15rem]' : ''}`}>
-          <button
-            type="button"
-            onClick={() => setDockOpen(o => !o)}
-            className="flex min-h-[2.25rem] items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-            aria-expanded={dockOpen}
-          >
-            <IconMessageCircle size={14} />
-            Assistent
-            {dockOpen ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
-          </button>
+        <div className={`relative shrink-0 border-t border-border bg-card flex flex-col ${dockOpen ? 'h-[45dvh] min-h-[15rem]' : ''}`}>
+          {/* Session history popover, filtered to this Werkzeug by default */}
+          {dockHistoryOpen && (
+            <div className="absolute bottom-full right-2 z-10 mb-2 flex max-h-[50dvh] w-80 max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+              <div className="flex shrink-0 gap-1.5 px-3 pb-1 pt-2.5">
+                <button
+                  type="button"
+                  onClick={() => setDockHistoryFilter('tool')}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${dockHistoryFilter === 'tool' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}
+                >
+                  Dieses Werkzeug
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDockHistoryFilter('all')}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${dockHistoryFilter === 'all' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}
+                >
+                  Alle
+                </button>
+              </div>
+              <ChatHistoryList
+                compact
+                filterAction={dockHistoryFilter === 'tool' && action ? { appId: action.app_id, identifier: action.identifier } : null}
+                onSelect={() => { setDockHistoryOpen(false); setDockOpen(true); }}
+              />
+            </div>
+          )}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setDockOpen(o => !o)}
+              className="flex w-full min-h-[2.25rem] items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              aria-expanded={dockOpen}
+            >
+              <IconMessageCircle size={14} />
+              Assistent
+              {dockOpen ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDockHistoryOpen(o => !o)}
+              title="Verlauf"
+              aria-expanded={dockHistoryOpen}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 transition-colors ${dockHistoryOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+            >
+              <IconHistory size={14} />
+            </button>
+          </div>
           <ChatPanel placeholder="Frage zum Code stellen…" collapsed={!dockOpen} />
         </div>
       </aside>

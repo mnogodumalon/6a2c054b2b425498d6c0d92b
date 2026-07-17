@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
-import type { Action, ActionCodeChangedEvent, FileAttachment } from '@/lib/actions-agent';
-import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, fixAction, revertAction as revertActionApi, downloadFile } from '@/lib/actions-agent';
+import type { Action, ActionCodeChangedEvent, ChatSessionAction, ChatSessionMeta, FileAttachment, StoredChatMessage } from '@/lib/actions-agent';
+import { fetchActionsAndFiles, executeAction, deleteAction as deleteActionApi, deleteAppAttachment as deleteAppAttachmentApi, agentChat, fixAction, revertAction as revertActionApi, downloadFile, fetchChatSessions, fetchChatTranscript, saveChatTranscript, deleteChatSession as deleteChatSessionApi } from '@/lib/actions-agent';
 
 export type ExecErrorContext = {
   actionName: string;
@@ -51,6 +51,9 @@ type Message = {
   kind?: 'action';
   fixContext?: ExecErrorContext;
   versionInfo?: VersionInfo;
+  // Fields a NEWER app version stored that this one does not know — kept
+  // verbatim and written back on save, so old code never strips new data.
+  ext?: Record<string, unknown>;
 };
 
 interface ActionsContextType {
@@ -65,6 +68,14 @@ interface ActionsContextType {
   fixError: (messageId: string) => void;
   fixLastRun: () => void;
   fixingMessageId: string | null;
+  chatSessions: ChatSessionMeta[];
+  activeThreadId: string;
+  // Timestamp of the restored session (divider in the panel), null for fresh chats
+  resumedSessionAt: string | null;
+  refreshChatSessions: () => Promise<void>;
+  loadChatSession: (id: string) => Promise<void>;
+  newChatSession: () => void;
+  deleteChatSession: (id: string) => Promise<void>;
   runningActionId: string | null;
   devMode: boolean;
   setDevMode: (v: boolean) => void;
@@ -129,6 +140,48 @@ function execErrorUpdate(
   };
 }
 
+// --- Chat persistence: (de)serialization between UI messages and the stored
+// shape. Data URIs and live File objects never persist (an attachment leaves
+// only its name); fixContext is session-local by design. Unknown fields from
+// newer app versions round-trip untouched via `ext` (forward compatibility).
+const KNOWN_STORED_MSG_FIELDS = new Set(['role', 'content', 'ts', 'kind', 'attachment', 'versionInfo']);
+
+function serializeMessages(messages: Message[]): StoredChatMessage[] {
+  return messages
+    .filter(m => m.content || m.versionInfo || m.imageName)
+    .map(m => {
+      const out: StoredChatMessage = { ...(m.ext ?? {}), role: m.role, content: m.content };
+      if (m.kind) out.kind = m.kind;
+      if (m.versionInfo) out.versionInfo = m.versionInfo;
+      if (m.image || m.imageName) out.attachment = { name: m.imageName || 'Upload' };
+      return out;
+    });
+}
+
+function deserializeMessages(stored: StoredChatMessage[]): Message[] {
+  const out: Message[] = [];
+  for (const m of stored) {
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+    const msg: Message = {
+      id: crypto.randomUUID(),
+      // safe: the guard above skipped every other value
+      role: m.role as 'user' | 'assistant',
+      content: typeof m.content === 'string' ? m.content : '',
+    };
+    if (m.kind === 'action') msg.kind = 'action';
+    const vi = m.versionInfo;
+    if (vi && typeof vi.version === 'number') msg.versionInfo = vi as VersionInfo;
+    if (m.attachment?.name) msg.imageName = m.attachment.name;
+    const ext: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(m)) {
+      if (!KNOWN_STORED_MSG_FIELDS.has(k)) ext[k] = v;
+    }
+    if (Object.keys(ext).length) msg.ext = ext;
+    out.push(msg);
+  }
+  return out;
+}
+
 export function useActions() {
   const ctx = useContext(ActionsContext);
   if (!ctx) throw new Error('useActions must be used within ActionsProvider');
@@ -138,9 +191,10 @@ export function useActions() {
 export function ActionsProvider({ children }: { children: ReactNode }) {
   const [actions, setActions] = useState<Action[]>([]);
   const [files, setFiles] = useState<FileAttachment[]>([]);
-  // `${app_id}/${identifier}` of files that appeared in the last refresh;
-  // null until the first successful fetch (its files are not "new")
-  const knownFileIdsRef = useRef<Set<string> | null>(null);
+  // `${app_id}/${identifier}` → content signature of every file in the last
+  // fetch; null until the first successful fetch (its files are not "new").
+  // freshFileIds marks the rows to tint: new ids or replaced files.
+  const knownFilesRef = useRef<Map<string, string> | null>(null);
   const [freshFileIds, setFreshFileIds] = useState<Set<string>>(() => new Set());
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -189,15 +243,22 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       const result = await fetchActionsAndFiles();
       setActions(result.actions);
       setFiles(result.files);
-      // Files that appeared since the previous fetch: the drawer expands the
-      // owning card's file list and fades a highlight on the new rows. The
-      // null ref skips the initial load — nothing is "new" then.
-      const ids = new Set(result.files.map(f => `${f.app_id}/${f.identifier}`));
-      const known = knownFileIdsRef.current;
-      knownFileIdsRef.current = ids;
+      // Files that appeared or were replaced since the previous fetch: the
+      // drawer expands the owning card's file list and tints those rows. An
+      // action that overwrites its single output file yields no new id —
+      // the signature catches that case. The null ref skips the initial
+      // load — nothing is "new" then.
+      const sig = (f: FileAttachment) => `${f.created_at}|${f.url}|${f.filename}`;
+      const current = new Map<string, string>();
+      for (const f of result.files) current.set(`${f.app_id}/${f.identifier}`, sig(f));
+      const known = knownFilesRef.current;
+      knownFilesRef.current = current;
       if (known) {
-        const added = result.files.filter(f => !known.has(`${f.app_id}/${f.identifier}`));
-        if (added.length) setFreshFileIds(new Set(added.map(f => `${f.app_id}/${f.identifier}`)));
+        const added = result.files.filter(f => known.get(`${f.app_id}/${f.identifier}`) !== sig(f));
+        if (added.length) {
+          console.debug('[actions] new files:', added.map(f => f.filename));
+          setFreshFileIds(prev => new Set([...prev, ...added.map(f => `${f.app_id}/${f.identifier}`)]));
+        }
       }
     } catch {
       // silently ignore — actions panel will be empty
@@ -220,12 +281,150 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [actionsHighlight]);
 
-  // Drop the new-file marks once their fade-out animation has finished
+  // Drop the new-file marks after a viewing window — the rows are tinted
+  // as long as their id is in the set; removal fades via transition-colors
   useEffect(() => {
     if (!freshFileIds.size) return;
-    const t = setTimeout(() => setFreshFileIds(new Set()), 4500);
+    const t = setTimeout(() => setFreshFileIds(new Set()), 4000);
     return () => clearTimeout(t);
   }, [freshFileIds]);
+
+  // --- Persistent chat sessions --------------------------------------------
+  // The rendered transcript is frontend-owned: it carries UI-only items
+  // (action bubbles, version cards) the agent stream never sees. Saves are
+  // debounced PUTs through the agent service; the backend derives the index
+  // entry and keeps its own step log for agent-memory rehydration.
+  const [chatSessions, setChatSessions] = useState<ChatSessionMeta[]>([]);
+  const [resumedSessionAt, setResumedSessionAt] = useState<string | null>(null);
+  // Session id stored on the last unload — the auto-resume target
+  const [initialResumeId] = useState<string | null>(() => {
+    try { return localStorage.getItem('chat-session'); } catch { return null; }
+  });
+
+  const messagesRef = useRef<Message[]>([]);
+  const threadIdRef = useRef(threadId);
+  useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
+  const chatDirtyRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+  // Loading a stored transcript must not count as new activity — it would
+  // bump the session's updated_at just for looking at it
+  const skipDirtyRef = useRef(false);
+  // Werkzeug binding + origin of the CURRENT session (index chips). The
+  // first binding wins; "new chat" and fixes reset them.
+  const sessionActionRef = useRef<ChatSessionAction | null>(null);
+  const sessionOriginRef = useRef<'chat' | 'fix'>('chat');
+  // Once the user interacts, the mount-time auto-resume must not take over
+  const interactedRef = useRef(false);
+
+  const upsertSessionMeta = useCallback((meta: ChatSessionMeta | null) => {
+    if (!meta) return;
+    setChatSessions(prev => [meta, ...prev.filter(s => s.id !== meta.id)]);
+  }, []);
+
+  const persistChat = useCallback((keepalive = false) => {
+    if (!chatDirtyRef.current) return;
+    const msgs = serializeMessages(messagesRef.current);
+    if (!msgs.length) return;
+    chatDirtyRef.current = false;
+    void saveChatTranscript(threadIdRef.current, {
+      messages: msgs,
+      action: sessionActionRef.current ?? undefined,
+      origin: sessionOriginRef.current,
+    }, keepalive).then(upsertSessionMeta);
+  }, [upsertSessionMeta]);
+
+  // Debounced save on every transcript change + last-session bookmark
+  useEffect(() => {
+    messagesRef.current = messages;
+    if (!messages.length) return;
+    try { localStorage.setItem('chat-session', threadIdRef.current); } catch {}
+    if (skipDirtyRef.current) { skipDirtyRef.current = false; return; }
+    chatDirtyRef.current = true;
+    if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => persistChat(), 800);
+    return () => { if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current); };
+  }, [messages, persistChat]);
+
+  // Tab hidden/closed: flush what the debounce still holds (keepalive
+  // lets the request finish after the page is gone)
+  useEffect(() => {
+    const flush = () => { if (document.visibilityState === 'hidden') persistChat(true); };
+    document.addEventListener('visibilitychange', flush);
+    return () => document.removeEventListener('visibilitychange', flush);
+  }, [persistChat]);
+
+  const refreshChatSessions = useCallback(async () => {
+    setChatSessions(await fetchChatSessions());
+  }, []);
+
+  // Mount: fetch the session index and restore the last session's transcript
+  // — a browser reload no longer wipes the conversation
+  useEffect(() => {
+    void refreshChatSessions();
+    if (!initialResumeId) return;
+    let cancelled = false;
+    void fetchChatTranscript(initialResumeId).then(t => {
+      if (cancelled || !t || interactedRef.current) return;
+      const restored = deserializeMessages(t.messages);
+      if (!restored.length) return;
+      if (t.action) sessionActionRef.current = t.action;
+      if (t.origin === 'fix') sessionOriginRef.current = 'fix';
+      skipDirtyRef.current = true;
+      setThreadId(initialResumeId as ReturnType<typeof crypto.randomUUID>);
+      threadIdRef.current = initialResumeId as ReturnType<typeof crypto.randomUUID>;
+      setMessages(prev => (prev.length ? prev : restored));
+      setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
+    });
+    return () => { cancelled = true; };
+  }, [initialResumeId, refreshChatSessions]);
+
+  const loadChatSession = useCallback(async (id: string) => {
+    if (chatLoadingRef.current) return; // never swap sessions mid-stream
+    interactedRef.current = true;
+    if (id === threadIdRef.current && messagesRef.current.length) return;
+    persistChat(); // flush the outgoing session before switching
+    const t = await fetchChatTranscript(id);
+    if (!t) return;
+    sessionActionRef.current = t.action ?? null;
+    sessionOriginRef.current = t.origin === 'fix' ? 'fix' : 'chat';
+    chatDirtyRef.current = false;
+    skipDirtyRef.current = true;
+    setThreadId(id as ReturnType<typeof crypto.randomUUID>);
+    threadIdRef.current = id as ReturnType<typeof crypto.randomUUID>;
+    setMessages(deserializeMessages(t.messages));
+    setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
+  }, [persistChat]);
+
+  const newChatSession = useCallback(() => {
+    if (chatLoadingRef.current) return; // never swap sessions mid-stream
+    interactedRef.current = true;
+    persistChat(); // the outgoing session is safe in the store
+    sessionActionRef.current = null;
+    sessionOriginRef.current = 'chat';
+    chatDirtyRef.current = false;
+    const fresh = crypto.randomUUID();
+    setThreadId(fresh);
+    threadIdRef.current = fresh;
+    setMessages([]);
+    setResumedSessionAt(null);
+  }, [persistChat]);
+
+  const deleteChatSessionFn = useCallback(async (id: string) => {
+    if (id === threadIdRef.current && chatLoadingRef.current) return;
+    if (!(await deleteChatSessionApi(id))) return;
+    setChatSessions(prev => prev.filter(s => s.id !== id));
+    if (id === threadIdRef.current) {
+      // Deleting the conversation you are in starts a fresh one
+      sessionActionRef.current = null;
+      sessionOriginRef.current = 'chat';
+      chatDirtyRef.current = false;
+      const fresh = crypto.randomUUID();
+      setThreadId(fresh);
+      threadIdRef.current = fresh;
+      setMessages([]);
+      setResumedSessionAt(null);
+    }
+  }, []);
 
   const openActionsDrawer = useCallback(() => setActionsDrawerOpen(true), []);
   const closeActionsDrawer = useCallback(() => setActionsDrawerOpen(false), []);
@@ -244,6 +443,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   // chat stays reserved for the conversation with the agent.
   const executeAndReport = useCallback((action: Action, inputs?: Record<string, unknown>, files?: File[], version?: number, silent = false) => {
     if (chatLoadingRef.current) return;
+    interactedRef.current = true;
     chatLoadingRef.current = true;
     if (!silent) setChatLoading(true);
     setRunningActionId(action.identifier);
@@ -373,7 +573,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
             ]);
             return;
           }
@@ -577,8 +777,19 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   const sendMessage = useCallback(async (text: string, image?: string, imageName?: string) => {
     if (chatLoadingRef.current) return;
+    interactedRef.current = true;
     chatLoadingRef.current = true;
     setChatLoading(true);
+
+    // Chatting while docked to the code drawer binds the session to that
+    // Werkzeug — the history list shows it as a tool chip
+    if (codeDrawerAction && !sessionActionRef.current) {
+      sessionActionRef.current = {
+        app_id: codeDrawerAction.app_id,
+        identifier: codeDrawerAction.identifier,
+        title: codeDrawerAction.title || codeDrawerAction.identifier,
+      };
+    }
 
     const userMsg: Message = {
       id: crypto.randomUUID(),
@@ -642,10 +853,19 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setChatLoading(true);
     setFixingMessageId(sourceMessageId);
 
-    // Fresh thread: the fix conversation replaces the current chat session,
+    // Fresh thread: the fix conversation becomes the active chat session,
     // so follow-up questions from the fix agent continue on the same thread.
+    // The outgoing conversation is flushed to the store first — a fix
+    // ARCHIVES the previous session (find it in the history), never wipes it.
+    interactedRef.current = true;
+    persistChat();
+    sessionActionRef.current = { app_id: ctx.appId, identifier: ctx.actionIdentifier, title: ctx.actionName };
+    sessionOriginRef.current = 'fix';
+    chatDirtyRef.current = false;
+    setResumedSessionAt(null);
     const fixThreadId = crypto.randomUUID();
     setThreadId(fixThreadId);
+    threadIdRef.current = fixThreadId;
     const answerId = crypto.randomUUID();
     setMessages([
       {
@@ -716,7 +936,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       chatLoadingRef.current = false;
       setChatLoading(false);
     }
-  }, [refreshActions, handleCodeChanged]);
+  }, [refreshActions, handleCodeChanged, persistChat]);
 
   const fixError = useCallback((messageId: string) => {
     const ctx = messages.find(m => m.id === messageId)?.fixContext;
@@ -742,7 +962,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, chatSessions, activeThreadId: threadId, resumedSessionAt, refreshChatSessions, loadChatSession, newChatSession, deleteChatSession: deleteChatSessionFn, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>
