@@ -107,15 +107,23 @@ function ActionRow({
     if (hasFreshFiles) setFilesOpen(true);
   }, [hasFreshFiles]);
 
-  // Arriving via highlight (code drawer ←, version-card chip): the card may
-  // be far down a long list — bring it into view so the flash is seen
+  // Arriving via highlight (code drawer ←, version-card chip): latch the
+  // flash locally so it plays out even when the context marker clears
+  // mid-animation, and center the card so it's unmissable in a long list.
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const [flash, setFlash] = useState(false);
   useEffect(() => {
-    if (highlight) rowRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (!highlight) return;
+    setFlash(true);
+    rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [highlight]);
 
   return (
-    <div ref={rowRef} className={`rounded-2xl border bg-card shadow-sm overflow-hidden${highlight ? ' animate-[action-return_1.4s_ease-out]' : ''}`}>
+    <div
+      ref={rowRef}
+      onAnimationEnd={(e) => { if (e.animationName === 'action-return') setFlash(false); }}
+      className={`rounded-2xl border bg-card shadow-sm overflow-hidden${flash ? ' animate-[action-return_2s_ease-out_0.25s_both]' : ''}`}
+    >
       <div className="flex items-start gap-3 p-4">
         <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <IconBolt size={18} />

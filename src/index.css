@@ -165,15 +165,20 @@
   --sidebar-ring: #d14600;
 }
 
-/* Code drawer → back: the Werkzeug card the user came from flashes briefly.
- * Applied via animate-[action-return_1.4s_ease-out]; the second shadow keeps
- * the card's resting shadow-sm alive while the ring fades. */
+/* Werkzeuge overview spotlight: the card the user arrived at (code drawer →
+ * back, version-card chip in the chat) tints and rings, then settles.
+ * Applied via animate-[action-return_2s_ease-out_0.25s_both] — the delay
+ * lets the drawer's slide-in finish first, `both` shows the tint from the
+ * first paint. The second shadow keeps the card's resting shadow-sm alive
+ * while the ring fades. */
 @keyframes action-return {
-  0%, 30% {
+  0%, 35% {
+    background-color: color-mix(in srgb, var(--primary) 10%, var(--card));
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent),
       0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
   100% {
+    background-color: var(--card);
     box-shadow: 0 0 0 3px transparent, 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 }

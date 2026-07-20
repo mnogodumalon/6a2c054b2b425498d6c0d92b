@@ -277,12 +277,16 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   // The Werkzeuge drawer and the code drawer form one navigation stack:
   // the overview is the base level, the code view stacks on top of it.
   const [actionsDrawerOpen, setActionsDrawerOpen] = useState(false);
-  // Briefly marks the card the user returned from (code drawer → back)
+  // Marks the card to spotlight in the Werkzeuge overview (code drawer →
+  // back, version-card chip). The row latches the flash locally when it sees
+  // the marker (ActionRow), so this is only a signal — the generous timeout
+  // just keeps a marker alive long enough for rows that mount late (drawer
+  // opening, list refresh) without letting it go stale forever.
   const [actionsHighlight, setActionsHighlight] = useState<{ appId: string; identifier: string } | null>(null);
 
   useEffect(() => {
     if (!actionsHighlight) return;
-    const t = setTimeout(() => setActionsHighlight(null), 1600);
+    const t = setTimeout(() => setActionsHighlight(null), 4000);
     return () => clearTimeout(t);
   }, [actionsHighlight]);
 
@@ -375,8 +379,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       if (t.action) sessionActionRef.current = t.action;
       if (t.origin === 'fix') sessionOriginRef.current = 'fix';
       skipDirtyRef.current = true;
-      setThreadId(initialResumeId as ReturnType<typeof crypto.randomUUID>);
-      threadIdRef.current = initialResumeId as ReturnType<typeof crypto.randomUUID>;
+      setThreadId(initialResumeId as `${string}-${string}-${string}-${string}-${string}`);
+      threadIdRef.current = initialResumeId as `${string}-${string}-${string}-${string}-${string}`;
       setMessages(prev => (prev.length ? prev : restored));
       setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
     });
@@ -394,8 +398,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     sessionOriginRef.current = t.origin === 'fix' ? 'fix' : 'chat';
     chatDirtyRef.current = false;
     skipDirtyRef.current = true;
-    setThreadId(id as ReturnType<typeof crypto.randomUUID>);
-    threadIdRef.current = id as ReturnType<typeof crypto.randomUUID>;
+    setThreadId(id as `${string}-${string}-${string}-${string}-${string}`);
+    threadIdRef.current = id as `${string}-${string}-${string}-${string}-${string}`;
     setMessages(deserializeMessages(t.messages));
     setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
   }, [persistChat]);
@@ -578,7 +582,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout ?? undefined) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
             ]);
             return;
           }

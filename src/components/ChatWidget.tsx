@@ -316,23 +316,23 @@ function VersionActionChip({ appId, identifier, version }: { appId: string; iden
   const title = action?.title || identifier;
   if (!action) {
     return (
-      <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+      <span title={title} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
         <IconBolt size={12} className="shrink-0" />
-        <span className="truncate">{title}</span>
+        <span className="min-w-0 truncate">{title}</span>
       </span>
     );
   }
   return (
     <button
       type="button"
-      title="Werkzeug öffnen"
+      title={`${title} — Werkzeug öffnen`}
       onClick={() => devMode
         ? openCodeDrawerFor(appId, identifier, { version, tab: 'code' })
         : showActionInOverview(appId, identifier)}
-      className="group inline-flex min-w-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
+      className="group inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
     >
       <IconBolt size={12} className="shrink-0" />
-      <span className="truncate">{title}</span>
+      <span className="min-w-0 truncate">{title}</span>
       <IconChevronRight size={12} className="shrink-0 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
     </button>
   );
