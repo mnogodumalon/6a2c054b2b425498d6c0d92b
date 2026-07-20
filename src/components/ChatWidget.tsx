@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode } from '@tabler/icons-react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode, IconBolt, IconChevronRight } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
+import { TypingDots } from '@/components/TypingDots';
 import { highlightPython, CopyButton } from '@/lib/highlight';
 import { useActions } from '@/context/ActionsContext';
 import type { ChatSessionMeta } from '@/lib/actions-agent';
@@ -303,6 +304,39 @@ const ORIGIN_LABELS: Record<string, string> = {
   initial: 'Erstellt',
   revert: 'Wiederhergestellt',
 };
+
+// The version card's action identity: a pill naming the Werkzeug the version
+// belongs to. Clicking it opens the action itself — devs land in the code
+// drawer at that version, everyone else in the Werkzeuge overview with the
+// card flashing. Falls back to a plain pill while the action isn't in the
+// refreshed list yet (or was deleted).
+function VersionActionChip({ appId, identifier, version }: { appId: string; identifier: string; version: number }) {
+  const { actions, devMode, openCodeDrawerFor, showActionInOverview } = useActions();
+  const action = actions.find(a => a.app_id === appId && a.identifier === identifier);
+  const title = action?.title || identifier;
+  if (!action) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+        <IconBolt size={12} className="shrink-0" />
+        <span className="truncate">{title}</span>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title="Werkzeug öffnen"
+      onClick={() => devMode
+        ? openCodeDrawerFor(appId, identifier, { version, tab: 'code' })
+        : showActionInOverview(appId, identifier)}
+      className="group inline-flex min-w-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
+    >
+      <IconBolt size={12} className="shrink-0" />
+      <span className="truncate">{title}</span>
+      <IconChevronRight size={12} className="shrink-0 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+    </button>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Chat history — session helpers + the list shared by the floating widget's
@@ -616,10 +650,13 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
             )}
             {m.versionInfo && (
               <div className="mt-1.5 w-full max-w-[85%] rounded-xl border border-border border-l-[3px] border-l-primary bg-card px-3.5 py-2.5">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <IconGitCommit size={14} className="text-primary shrink-0" />
-                  <span className="font-semibold text-foreground">Version {m.versionInfo.version}</span>
-                  <span>{ORIGIN_LABELS[m.versionInfo.origin] || m.versionInfo.origin}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                  <VersionActionChip appId={m.versionInfo.appId} identifier={m.versionInfo.actionIdentifier} version={m.versionInfo.version} />
+                  <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                    <IconGitCommit size={14} className="text-primary shrink-0" />
+                    <span className="font-semibold text-foreground">Version {m.versionInfo.version}</span>
+                    {ORIGIN_LABELS[m.versionInfo.origin] || m.versionInfo.origin}
+                  </span>
                 </div>
                 {m.versionInfo.summary && (
                   <div className="mt-1 text-sm font-medium text-foreground">{m.versionInfo.summary}</div>
@@ -652,7 +689,7 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
         {chatLoading && messages.length > 0 && messages[messages.length - 1].content !== 'In Arbeit...' && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content === '' && (
           <div className="flex justify-start">
             <div className="bg-muted rounded-2xl rounded-bl-md px-3.5 py-2.5 flex items-center gap-2 text-sm text-muted-foreground">
-              <IconLoader2 size={14} className="animate-spin" />
+              <TypingDots />
               Denkt nach...
             </div>
           </div>

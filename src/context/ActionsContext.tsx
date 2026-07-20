@@ -91,6 +91,7 @@ interface ActionsContextType {
   openCodeDrawerFor: (appId: string, identifier: string, focus?: CodeDrawerFocus) => void;
   closeCodeDrawer: () => void;
   backToActions: () => void;
+  showActionInOverview: (appId: string, identifier: string) => void;
   reportCodeDrawerSelection: (sel: { version: number; current_version: number } | null) => void;
   actionsHighlight: { appId: string; identifier: string } | null;
   revertActionVersion: (appId: string, identifier: string, to: number, expectedCurrent?: number) => Promise<void>;
@@ -203,6 +204,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const [threadId, setThreadId] = useState(() => crypto.randomUUID());
   const [fixingMessageId, setFixingMessageId] = useState<string | null>(null);
   const chatLoadingRef = useRef(false);
+  // Id of the assistant bubble the current stream fills — version cards are
+  // inserted BEFORE it so the agent's final answer stays the last message
+  // (same principle as the fix-status note in startFix).
+  const streamingAnswerIdRef = useRef<string | null>(null);
   const [inputFormAction, setInputFormAction] = useState<Action | null>(null);
   const [inputFormOptions, setInputFormOptions] = useState<
     Record<string, Array<{ value: string; label: string }>> | null
@@ -573,7 +578,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error!, result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout ?? undefined) },
             ]);
             return;
           }
@@ -683,11 +688,23 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     openCodeDrawer(action);
   }, [openCodeDrawer]);
 
+  // Non-dev target of the version-card chip: the Werkzeuge overview with the
+  // action's card flashing briefly (devs land in the code drawer instead).
+  const showActionInOverview = useCallback((appId: string, identifier: string) => {
+    setActionsHighlight({ appId, identifier });
+    setActionsDrawerOpen(true);
+  }, []);
+
   const appendVersionCard = useCallback((info: VersionInfo) => {
-    setMessages(prev => [
-      ...prev,
-      { id: crypto.randomUUID(), role: 'assistant', content: '', versionInfo: info },
-    ]);
+    const card: Message = { id: crypto.randomUUID(), role: 'assistant', content: '', versionInfo: info };
+    setMessages(prev => {
+      // During a chat/fix stream the card slots in above the answer bubble;
+      // standalone cards (manual revert) simply append.
+      const streamingId = streamingAnswerIdRef.current;
+      const idx = streamingId ? prev.findIndex(m => m.id === streamingId) : -1;
+      const at = idx === -1 ? prev.length : idx;
+      return [...prev.slice(0, at), card, ...prev.slice(at)];
+    });
   }, []);
 
   // The agent saved action code during a chat/fix turn: show a version card
@@ -799,6 +816,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       imageName: image ? imageName ?? undefined : undefined,
     };
     const assistantId = crypto.randomUUID();
+    streamingAnswerIdRef.current = assistantId;
 
     setMessages(prev => [
       ...prev,
@@ -840,6 +858,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         )
       );
     } finally {
+      streamingAnswerIdRef.current = null;
       chatLoadingRef.current = false;
       setChatLoading(false);
       void refreshActions();
@@ -867,6 +886,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setThreadId(fixThreadId);
     threadIdRef.current = fixThreadId;
     const answerId = crypto.randomUUID();
+    streamingAnswerIdRef.current = answerId;
     setMessages([
       {
         id: crypto.randomUUID(),
@@ -932,6 +952,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
         },
       ]);
     } finally {
+      streamingAnswerIdRef.current = null;
       setFixingMessageId(null);
       chatLoadingRef.current = false;
       setChatLoading(false);
@@ -962,7 +983,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, chatSessions, activeThreadId: threadId, resumedSessionAt, refreshChatSessions, loadChatSession, newChatSession, deleteChatSession: deleteChatSessionFn, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, chatSessions, activeThreadId: threadId, resumedSessionAt, refreshChatSessions, loadChatSession, newChatSession, deleteChatSession: deleteChatSessionFn, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, showActionInOverview, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

@@ -177,3 +177,11 @@
     box-shadow: 0 0 0 3px transparent, 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 }
+
+/* Chat "thinking" bubble: three dots blinking in sequence. Applied via
+ * animate-[chat-blink_1.2s_ease-in-out_infinite] with staggered
+ * [animation-delay:…] on the second and third dot. */
+@keyframes chat-blink {
+  0%, 60%, 100% { opacity: 0.25; }
+  30% { opacity: 1; }
+}

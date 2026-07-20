@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconBolt, IconChevronDown, IconCode, IconDownload, IconFile, IconFileTypePdf,
@@ -107,8 +107,15 @@ function ActionRow({
     if (hasFreshFiles) setFilesOpen(true);
   }, [hasFreshFiles]);
 
+  // Arriving via highlight (code drawer ←, version-card chip): the card may
+  // be far down a long list — bring it into view so the flash is seen
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (highlight) rowRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [highlight]);
+
   return (
-    <div className={`rounded-2xl border bg-card shadow-sm overflow-hidden${highlight ? ' animate-[action-return_1.4s_ease-out]' : ''}`}>
+    <div ref={rowRef} className={`rounded-2xl border bg-card shadow-sm overflow-hidden${highlight ? ' animate-[action-return_1.4s_ease-out]' : ''}`}>
       <div className="flex items-start gap-3 p-4">
         <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <IconBolt size={18} />
