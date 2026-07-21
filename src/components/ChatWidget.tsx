@@ -650,18 +650,16 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
             )}
             {m.versionInfo && (
               <div className="mt-1.5 w-full max-w-[85%] rounded-xl border border-border border-l-[3px] border-l-primary bg-card px-3.5 py-2.5">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                  <VersionActionChip appId={m.versionInfo.appId} identifier={m.versionInfo.actionIdentifier} version={m.versionInfo.version} />
-                  <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <IconGitCommit size={14} className="text-primary shrink-0" />
-                    <span className="font-semibold text-foreground">Version {m.versionInfo.version}</span>
-                    {ORIGIN_LABELS[m.versionInfo.origin] || m.versionInfo.origin}
-                  </span>
-                </div>
+                <VersionActionChip appId={m.versionInfo.appId} identifier={m.versionInfo.actionIdentifier} version={m.versionInfo.version} />
                 {m.versionInfo.summary && (
                   <div className="mt-1 text-sm font-medium text-foreground">{m.versionInfo.summary}</div>
                 )}
-                <div className="mt-2 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="mr-auto inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <IconGitCommit size={14} className="text-primary shrink-0" />
+                    <span className="font-semibold text-foreground">v{m.versionInfo.version}</span>
+                    <span>· {ORIGIN_LABELS[m.versionInfo.origin] || m.versionInfo.origin}</span>
+                  </span>
                   {devMode && (
                     <button
                       type="button"
