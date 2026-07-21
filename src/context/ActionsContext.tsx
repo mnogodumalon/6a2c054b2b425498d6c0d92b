@@ -419,8 +419,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       if (t.action) applySessionAction(t.action);
       if (t.origin === 'fix') sessionOriginRef.current = 'fix';
       skipDirtyRef.current = true;
-      setThreadId(initialResumeId as ReturnType<typeof crypto.randomUUID>);
-      threadIdRef.current = initialResumeId as ReturnType<typeof crypto.randomUUID>;
+      setThreadId(initialResumeId as `${string}-${string}-${string}-${string}-${string}`);
+      threadIdRef.current = initialResumeId as `${string}-${string}-${string}-${string}-${string}`;
       setMessages(prev => (prev.length ? prev : restored));
       setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
     });
@@ -438,8 +438,8 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     sessionOriginRef.current = t.origin === 'fix' ? 'fix' : 'chat';
     chatDirtyRef.current = false;
     skipDirtyRef.current = true;
-    setThreadId(id as ReturnType<typeof crypto.randomUUID>);
-    threadIdRef.current = id as ReturnType<typeof crypto.randomUUID>;
+    setThreadId(id as `${string}-${string}-${string}-${string}-${string}`);
+    threadIdRef.current = id as `${string}-${string}-${string}-${string}-${string}`;
     setMessages(deserializeMessages(t.messages));
     setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
   }, [persistChat, applySessionAction]);
@@ -644,7 +644,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout, undefined, undefined, result.runId) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout, undefined, undefined, result.runId ?? undefined) },
             ]);
             return;
           }

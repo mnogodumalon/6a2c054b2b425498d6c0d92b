@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode, IconBolt, IconChevronRight, IconPlayerPlay, IconPhoto, IconFileText, IconExternalLink, IconHash } from '@tabler/icons-react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode, IconBolt, IconChevronRight, IconPhoto, IconFileText, IconExternalLink } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
 import { TypingDots } from '@/components/TypingDots';
 import { highlightPython, CopyButton } from '@/lib/highlight';
@@ -394,6 +394,12 @@ function ArtifactResultRow({ artifact, probe }: { artifact: Artifact; probe?: Ar
 }
 
 export function RunResultCard({ info, raw }: { info: RunInfo; raw: string }) {
+  // The title navigates like the version card's chip: devs land in the code
+  // drawer (at the executed version for historical test-runs), everyone else
+  // in the Werkzeuge overview with the card flashing. Plain text while the
+  // action isn't in the refreshed list yet (or was deleted).
+  const { actions, devMode, openCodeDrawerFor, showActionInOverview } = useActions();
+  const action = actions.find(a => a.app_id === info.appId && a.identifier === info.actionIdentifier);
   const { artifacts, rest } = useMemo(() => splitRunOutput(raw), [raw]);
   const probeUrls = useMemo(
     () => artifacts.filter(a => artifactKindFromExt(a) === 'other').map(a => a.url),
@@ -410,11 +416,24 @@ export function RunResultCard({ info, raw }: { info: RunInfo; raw: string }) {
     <div className="mt-1.5 w-full max-w-[85%] rounded-xl border border-border bg-card px-3.5 py-2.5">
       <div className="flex items-center gap-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <IconPlayerPlay size={13} />
+          <IconBolt size={13} />
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {info.actionName}{info.version != null ? ` (v${info.version})` : ''}
-        </span>
+        {action ? (
+          <button
+            type="button"
+            title={`${info.actionName} — Aktion öffnen`}
+            onClick={() => devMode
+              ? openCodeDrawerFor(info.appId, info.actionIdentifier, info.version != null ? { version: info.version, tab: 'code' } : undefined)
+              : showActionInOverview(info.appId, info.actionIdentifier)}
+            className="min-w-0 flex-1 truncate text-left text-sm font-semibold hover:text-primary transition-colors"
+          >
+            {info.actionName}{info.version != null ? ` (v${info.version})` : ''}
+          </button>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+            {info.actionName}{info.version != null ? ` (v${info.version})` : ''}
+          </span>
+        )}
         <span className="shrink-0 rounded-full border border-green-200 bg-green-50 px-1.5 py-px text-[10px] font-semibold text-green-700">
           ✓ Ausgeführt
         </span>
@@ -424,7 +443,7 @@ export function RunResultCard({ info, raw }: { info: RunInfo; raw: string }) {
           {artifacts.map(a => <ArtifactResultRow key={a.url} artifact={a} probe={probes[a.url]} />)}
           {rest && (artifacts.length > 0 ? (
             <details className="border-t border-dashed border-border pt-1.5">
-              <summary className="cursor-pointer text-xs font-medium text-muted-foreground select-none">Details (JSON)</summary>
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground select-none">Details</summary>
               <JsonView text={rest} />
             </details>
           ) : restIsJson ? (
@@ -446,16 +465,15 @@ export function RunIdChip({ runId, className = '' }: { runId: string; className?
   return (
     <button
       type="button"
-      title="Run-ID kopieren — bei Problemen für den Support angeben"
+      title="RunID kopieren — bei Problemen für den Support angeben"
       onClick={() => {
         void navigator.clipboard?.writeText(runId).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }).catch(() => {});
       }}
-      className={`inline-flex items-center gap-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/60 transition-opacity hover:text-muted-foreground focus-visible:opacity-100 ${className}`}
+      className={`inline-flex items-center font-mono text-[10px] tabular-nums text-muted-foreground/60 transition-opacity hover:text-muted-foreground focus-visible:opacity-100 ${className}`}
     >
-      <IconHash size={10} className="shrink-0" />
       {copied ? 'Kopiert!' : runId}
     </button>
   );

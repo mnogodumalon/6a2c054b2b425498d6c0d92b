@@ -107,14 +107,17 @@ function ActionRow({
     if (hasFreshFiles) setFilesOpen(true);
   }, [hasFreshFiles]);
 
-  // Arriving via highlight (code drawer ←, version-card chip): latch the
-  // flash locally so it plays out even when the context marker clears
-  // mid-animation, and center the card so it's unmissable in a long list.
+  // Arriving via highlight (code drawer ←, version/run-card title): latch
+  // the flash locally so it plays out even when the context marker clears
+  // mid-animation, center the card so it's unmissable in a long list, and
+  // open the files list — the run the user came from usually left its
+  // output there.
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (!highlight) return;
     setFlash(true);
+    setFilesOpen(true);
     rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [highlight]);
 

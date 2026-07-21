@@ -354,6 +354,8 @@ Wrong: a static page that renders all at once and mutates silently. Right: greet
 
 **Generated components use semantic tokens** — the pre-generated `index.css` design system applies to all components automatically. Do NOT edit it.
 
+**Never use `color-mix()`** — neither in CSS nor in arbitrary class values like `bg-[color-mix(…)]`. The build pipeline silently drops such declarations, leaving invisible styling bugs. Use opacity modifiers (`bg-primary/10`) or literal colors instead.
+
 ### Responsive Layout Rules (MUST follow!)
 
 All UI you build must work from 320px mobile to 1440px+ desktop without any element bleeding outside its parent container. Follow these rules:
