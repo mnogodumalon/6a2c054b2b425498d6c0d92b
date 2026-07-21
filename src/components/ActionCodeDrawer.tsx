@@ -3,14 +3,15 @@ import { createPortal } from 'react-dom';
 import {
   IconX, IconCode, IconChevronDown, IconHistory, IconMessageCircle,
   IconChevronUp, IconRestore, IconPlayerPlay, IconWand, IconExternalLink,
-  IconArrowLeft, IconBolt, IconLoader2,
+  IconArrowLeft, IconBolt, IconLoader2, IconMessagePlus,
 } from '@tabler/icons-react';
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
 import { useActions } from '@/context/ActionsContext';
 import { fetchActionHistory, type Action, type ActionVersion } from '@/lib/actions-agent';
+import { splitRunOutput, artifactKindFromExt as artifactKind, type ArtifactKind } from '@/lib/run-results';
 import { highlightPython, CopyButton, diffLines } from '@/lib/highlight';
-import { ChatPanel, ChatHistoryList, JsonView } from '@/components/ChatWidget';
+import { ChatPanel, ChatHistoryList, JsonView, RunIdChip } from '@/components/ChatWidget';
 
 const ORIGIN_LABELS: Record<string, string> = {
   fix: 'Auto-Fix',
@@ -41,42 +42,8 @@ function versionSummary(v: ActionVersion): string {
 // a card with open/download buttons and — for PDFs/images — an inline preview.
 // Fields already shown on the card (URL, filename hint) are stripped from the
 // remaining JSON so nothing appears twice.
-type Artifact = { url: string; filename: string };
-
-function splitRunOutput(stdout: string | null): { artifacts: Artifact[]; rest: string | null } {
-  if (!stdout) return { artifacts: [], rest: null };
-  let parsed: unknown;
-  try { parsed = JSON.parse(stdout); } catch { return { artifacts: [], rest: stdout }; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { artifacts: [], rest: stdout };
-  const obj = parsed as Record<string, unknown>;
-  const nameHint = [obj.dateiname, obj.filename, obj.name].find(v => typeof v === 'string') as string | undefined;
-  const urls = Object.values(obj).filter((v): v is string => typeof v === 'string' && /^https?:\/\//.test(v));
-  const artifacts = urls.map(url => ({
-    url,
-    filename: (urls.length === 1 && nameHint) || url.split('?')[0].split('/').pop() || 'datei',
-  }));
-  const urlSet = new Set(urls);
-  const nameSet = new Set(artifacts.map(a => a.filename));
-  const restEntries = Object.entries(obj).filter(([k, v]) =>
-    !(typeof v === 'string' && (urlSet.has(v) || (nameSet.has(v) && ['dateiname', 'filename', 'name'].includes(k))))
-  );
-  return {
-    artifacts,
-    rest: restEntries.length ? JSON.stringify(Object.fromEntries(restEntries), null, 2) : null,
-  };
-}
-
-// 'html' = generated HTML FILE (download + iframe preview);
-// 'page' = a web page such as a record link (plain link row, no download)
-type ArtifactKind = 'pdf' | 'image' | 'html' | 'page' | 'other';
-
-function artifactKind(a: Artifact): ArtifactKind {
-  const probe = (a.filename || a.url.split('?')[0]).toLowerCase();
-  if (probe.endsWith('.pdf')) return 'pdf';
-  if (/\.(png|jpe?g|gif|webp)$/.test(probe)) return 'image';
-  if (/\.html?$/.test(probe)) return 'html';
-  return 'other';
-}
+// Artifact extraction/classification is shared with the chat's run cards —
+// see @/lib/run-results (this file keeps only its iframe-preview probing).
 
 function VersionEntry({ version, current, selected, onSelect }: {
   version: ActionVersion;
@@ -118,7 +85,7 @@ export function ActionCodeDrawer() {
     codeDrawerAction: action, codeDrawerFocus, closeCodeDrawer, revertActionVersion,
     chatLoading, runAction, runningActionId, lastRunResult, fixLastRun, downloadFile,
     actions, openCodeDrawer, backToActions, closeActionsDrawer, actionsDrawerOpen,
-    reportCodeDrawerSelection,
+    reportCodeDrawerSelection, newChatSession, sessionAction, dockScope, setDockScope,
   } = useActions();
 
   const [versions, setVersions] = useState<ActionVersion[] | null>(null);
@@ -131,14 +98,37 @@ export function ActionCodeDrawer() {
   // History popover over the dock bar; the filter defaults to this Werkzeug
   const [dockHistoryOpen, setDockHistoryOpen] = useState(false);
   const [dockHistoryFilter, setDockHistoryFilter] = useState<'tool' | 'all'>('tool');
+
+  // Fresh conversation about this Werkzeug — the only chat surface while the
+  // drawer is open is the dock, so the fresh-start entry point lives here
+  // too. The session is tagged with the action so it later shows up under
+  // the popover's tool filter.
+  const startFreshChat = () => {
+    newChatSession(action ? { app_id: action.app_id, identifier: action.identifier, title: action.title || action.identifier } : undefined);
+    setDockScope('action');
+    setDockHistoryOpen(false);
+    setDockOpen(true);
+  };
+
+  // Context chip: what the dock currently talks about. 'action' shows the
+  // viewed Werkzeug's context, 'global' the active conversation.
+  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
+  const sessionMatchesAction = !!(sessionAction && action
+    && sessionAction.app_id === action.app_id && sessionAction.identifier === action.identifier);
+  const pickScope = (scope: 'action' | 'global') => {
+    setScopeMenuOpen(false);
+    setDockScope(scope);
+    setDockOpen(true);
+  };
   const [restoring, setRestoring] = useState(false);
   const lastRunTsRef = useRef(0);
 
-  // The drawer stays mounted across opens — fold the popover away whenever
+  // The drawer stays mounted across opens — fold the popovers away whenever
   // it targets a different action (or none)
   useEffect(() => {
     setDockHistoryOpen(false);
     setDockHistoryFilter('tool');
+    setScopeMenuOpen(false);
   }, [action]);
 
   // The latest execution of THIS action (feeds the output tab)
@@ -381,7 +371,7 @@ export function ActionCodeDrawer() {
                 aria-haspopup="listbox"
                 aria-expanded={switcherOpen}
                 className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-0.5 -mx-1.5 text-left hover:bg-muted transition-colors"
-                title="Werkzeug wechseln"
+                title="Aktion wechseln"
               >
                 <span className="min-w-0">
                   <span className="block text-base font-semibold tracking-tight truncate">{title}</span>
@@ -415,11 +405,11 @@ export function ActionCodeDrawer() {
           {switcherOpen && (
             <div
               role="listbox"
-              aria-label="Werkzeug wechseln"
+              aria-label="Aktion wechseln"
               className="absolute left-14 top-full z-10 mt-1 flex max-h-80 w-80 max-w-[82vw] flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-card p-1.5 shadow-xl"
             >
               <div className="px-2 pt-1 pb-1.5 text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                Werkzeug wechseln
+                Aktion wechseln
               </div>
               {actions.map(a => {
                 const isCurrent = a.app_id === action.app_id && a.identifier === action.identifier;
@@ -569,6 +559,9 @@ export function ActionCodeDrawer() {
                       Code aus der Historie — nicht wiederhergestellt
                     </span>
                   )}
+                  {/* Support correlator — always visible here, the output
+                      tab is where problems get reported from */}
+                  {run.runId && <RunIdChip runId={run.runId} />}
                 </div>
                 {run.inputs && Object.keys(run.inputs).length > 0 && (
                   <div className="text-xs text-muted-foreground">
@@ -701,7 +694,7 @@ export function ActionCodeDrawer() {
                   onClick={() => setDockHistoryFilter('tool')}
                   className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${dockHistoryFilter === 'tool' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}
                 >
-                  Dieses Werkzeug
+                  Diese Aktion
                 </button>
                 <button
                   type="button"
@@ -714,30 +707,88 @@ export function ActionCodeDrawer() {
               <ChatHistoryList
                 compact
                 filterAction={dockHistoryFilter === 'tool' && action ? { appId: action.app_id, identifier: action.identifier } : null}
-                onSelect={() => { setDockHistoryOpen(false); setDockOpen(true); }}
+                onSelect={(s) => {
+                  setDockHistoryOpen(false);
+                  setDockOpen(true);
+                  // Sync the context chip: a foreign session shows as 'global'
+                  setDockScope(s?.action && action && s.action.app_id === action.app_id && s.action.identifier === action.identifier ? 'action' : 'global');
+                }}
+                onNewChat={startFreshChat}
               />
             </div>
           )}
-          <div className="relative shrink-0">
+          <div className="relative flex shrink-0 items-center gap-1 px-2">
+            {/* Context chip — what the dock currently talks about */}
+            <button
+              type="button"
+              onClick={() => { setScopeMenuOpen(o => !o); setDockHistoryOpen(false); }}
+              aria-expanded={scopeMenuOpen}
+              title={dockScope === 'action' ? (action ? action.title || action.identifier : '') : 'Allgemeine Unterhaltung'}
+              className={`flex min-w-0 max-w-[45%] shrink items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${scopeMenuOpen ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}
+            >
+              {dockScope === 'action'
+                ? <IconBolt size={12} className="shrink-0 text-primary" />
+                : <IconMessageCircle size={12} className="shrink-0" />}
+              <span className="min-w-0 truncate">{dockScope === 'action' ? (action ? action.title || action.identifier : '') : 'Allgemein'}</span>
+              <IconChevronUp size={12} className="shrink-0 opacity-60" />
+            </button>
             <button
               type="button"
               onClick={() => setDockOpen(o => !o)}
-              className="flex w-full min-h-[2.25rem] items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              className="flex min-h-[2.25rem] min-w-0 flex-1 items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
               aria-expanded={dockOpen}
             >
               <IconMessageCircle size={14} />
               Assistent
               {dockOpen ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
             </button>
-            <button
-              type="button"
-              onClick={() => setDockHistoryOpen(o => !o)}
-              title="Verlauf"
-              aria-expanded={dockHistoryOpen}
-              className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 transition-colors ${dockHistoryOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
-            >
-              <IconHistory size={14} />
-            </button>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={startFreshChat}
+                title="Neue Unterhaltung zu dieser Aktion"
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <IconMessagePlus size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setDockHistoryOpen(o => !o); setScopeMenuOpen(false); }}
+                title="Verlauf"
+                aria-expanded={dockHistoryOpen}
+                className={`rounded-md p-1.5 transition-colors ${dockHistoryOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+              >
+                <IconHistory size={14} />
+              </button>
+            </div>
+            {scopeMenuOpen && (
+              <div className="absolute bottom-full left-2 z-10 mb-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-card p-1.5 shadow-2xl">
+                <button
+                  type="button"
+                  onClick={() => pickScope('action')}
+                  className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-muted/60"
+                >
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary"><IconBolt size={14} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">{action ? action.title || action.identifier : ''}</span>
+                    <span className="block text-xs text-muted-foreground">Fragen & Änderungen zu dieser Aktion</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => pickScope('global')}
+                  className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-muted/60"
+                >
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><IconMessageCircle size={14} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">Allgemeine Unterhaltung</span>
+                    {sessionAction && !sessionMatchesAction && (
+                      <span className="block truncate text-xs text-muted-foreground">Zuletzt: {sessionAction.title || sessionAction.identifier}</span>
+                    )}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
           <ChatPanel placeholder="Frage zum Code stellen…" collapsed={!dockOpen} />
         </div>

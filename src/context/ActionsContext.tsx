@@ -10,6 +10,8 @@ export type ExecErrorContext = {
   stdout?: string;
   inputs?: Record<string, unknown>;
   files?: File[];
+  // Trace id of the failing run — forwarded to the fix agent (failed_run)
+  runId?: string;
 };
 
 // Where the code drawer should land when opened (e.g. from a version card)
@@ -24,6 +26,15 @@ export type VersionInfo = {
   origin: string;
 };
 
+// Payload of a run card in the chat — one per successful action execution
+export type RunInfo = {
+  appId: string;
+  actionIdentifier: string;
+  actionName: string;
+  version?: number | null;
+  status: 'ok';
+};
+
 // Result of the most recent action execution — feeds the code drawer's
 // output tab (version is set for test-runs of a historical version)
 export type RunResult = {
@@ -36,6 +47,8 @@ export type RunResult = {
   stdout: string | null;
   error: string | null;
   ts: number;
+  // Trace correlator of this run — absent when the backend has tracing off
+  runId?: string | null;
 };
 
 type Message = {
@@ -51,6 +64,13 @@ type Message = {
   kind?: 'action';
   fixContext?: ExecErrorContext;
   versionInfo?: VersionInfo;
+  // Successful action run — rendered as a run card with typed result rows
+  // (files, images, links) instead of raw JSON/URLs; content keeps the raw
+  // stdout so older app versions render the plain fallback.
+  runInfo?: RunInfo;
+  // Trace id of the /execute run behind this message (success or error) —
+  // the support correlator; absent when the backend has tracing disabled.
+  runId?: string;
   // Fields a NEWER app version stored that this one does not know — kept
   // verbatim and written back on save, so old code never strips new data.
   ext?: Record<string, unknown>;
@@ -74,7 +94,12 @@ interface ActionsContextType {
   resumedSessionAt: string | null;
   refreshChatSessions: () => Promise<void>;
   loadChatSession: (id: string) => Promise<void>;
-  newChatSession: () => void;
+  newChatSession: (action?: ChatSessionAction) => void;
+  // Werkzeug binding of the ACTIVE session (null = general conversation)
+  sessionAction: ChatSessionAction | null;
+  // What the code drawer's chat dock shows — see the state's comment
+  dockScope: 'action' | 'global';
+  setDockScope: (scope: 'action' | 'global') => void;
   deleteChatSession: (id: string) => Promise<void>;
   runningActionId: string | null;
   devMode: boolean;
@@ -125,10 +150,12 @@ function execErrorUpdate(
   stdout?: string | null,
   inputs?: Record<string, unknown>,
   files?: File[],
-): Pick<Message, 'content' | 'fixContext'> {
+  runId?: string | null,
+): Pick<Message, 'content' | 'fixContext' | 'runId'> {
   const name = action.title || action.identifier;
   return {
     content: `**Etwas klappte nicht bei der Ausführung von \`${name}\`:**\n\`\`\`\n${errorText}\n\`\`\``,
+    runId: runId ?? undefined,
     fixContext: {
       actionName: name,
       actionIdentifier: action.identifier,
@@ -137,6 +164,7 @@ function execErrorUpdate(
       stdout: stdout || undefined,
       inputs,
       files,
+      runId: runId ?? undefined,
     },
   };
 }
@@ -145,15 +173,17 @@ function execErrorUpdate(
 // shape. Data URIs and live File objects never persist (an attachment leaves
 // only its name); fixContext is session-local by design. Unknown fields from
 // newer app versions round-trip untouched via `ext` (forward compatibility).
-const KNOWN_STORED_MSG_FIELDS = new Set(['role', 'content', 'ts', 'kind', 'attachment', 'versionInfo']);
+const KNOWN_STORED_MSG_FIELDS = new Set(['role', 'content', 'ts', 'kind', 'attachment', 'versionInfo', 'runInfo', 'runId']);
 
 function serializeMessages(messages: Message[]): StoredChatMessage[] {
   return messages
-    .filter(m => m.content || m.versionInfo || m.imageName)
+    .filter(m => m.content || m.versionInfo || m.runInfo || m.imageName)
     .map(m => {
       const out: StoredChatMessage = { ...(m.ext ?? {}), role: m.role, content: m.content };
       if (m.kind) out.kind = m.kind;
       if (m.versionInfo) out.versionInfo = m.versionInfo;
+      if (m.runInfo) out.runInfo = m.runInfo;
+      if (m.runId) out.runId = m.runId;
       if (m.image || m.imageName) out.attachment = { name: m.imageName || 'Upload' };
       return out;
     });
@@ -172,6 +202,9 @@ function deserializeMessages(stored: StoredChatMessage[]): Message[] {
     if (m.kind === 'action') msg.kind = 'action';
     const vi = m.versionInfo;
     if (vi && typeof vi.version === 'number') msg.versionInfo = vi as VersionInfo;
+    const ri = m.runInfo;
+    if (ri && typeof ri.actionName === 'string' && ri.status === 'ok') msg.runInfo = ri as RunInfo;
+    if (typeof m.runId === 'string' && m.runId) msg.runId = m.runId;
     if (m.attachment?.name) msg.imageName = m.attachment.name;
     const ext: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(m)) {
@@ -322,6 +355,13 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   // first binding wins; "new chat" and fixes reset them.
   const sessionActionRef = useRef<ChatSessionAction | null>(null);
   const sessionOriginRef = useRef<'chat' | 'fix'>('chat');
+  // State mirror of sessionActionRef — the code drawer's context chip and
+  // the dock's scoped empty state render from it
+  const [sessionAction, setSessionAction] = useState<ChatSessionAction | null>(null);
+  const applySessionAction = useCallback((a: ChatSessionAction | null) => {
+    sessionActionRef.current = a;
+    setSessionAction(a);
+  }, []);
   // Once the user interacts, the mount-time auto-resume must not take over
   const interactedRef = useRef(false);
 
@@ -376,16 +416,16 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       if (cancelled || !t || interactedRef.current) return;
       const restored = deserializeMessages(t.messages);
       if (!restored.length) return;
-      if (t.action) sessionActionRef.current = t.action;
+      if (t.action) applySessionAction(t.action);
       if (t.origin === 'fix') sessionOriginRef.current = 'fix';
       skipDirtyRef.current = true;
-      setThreadId(initialResumeId as `${string}-${string}-${string}-${string}-${string}`);
-      threadIdRef.current = initialResumeId as `${string}-${string}-${string}-${string}-${string}`;
+      setThreadId(initialResumeId as ReturnType<typeof crypto.randomUUID>);
+      threadIdRef.current = initialResumeId as ReturnType<typeof crypto.randomUUID>;
       setMessages(prev => (prev.length ? prev : restored));
       setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
     });
     return () => { cancelled = true; };
-  }, [initialResumeId, refreshChatSessions]);
+  }, [initialResumeId, refreshChatSessions, applySessionAction]);
 
   const loadChatSession = useCallback(async (id: string) => {
     if (chatLoadingRef.current) return; // never swap sessions mid-stream
@@ -394,21 +434,22 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     persistChat(); // flush the outgoing session before switching
     const t = await fetchChatTranscript(id);
     if (!t) return;
-    sessionActionRef.current = t.action ?? null;
+    applySessionAction(t.action ?? null);
     sessionOriginRef.current = t.origin === 'fix' ? 'fix' : 'chat';
     chatDirtyRef.current = false;
     skipDirtyRef.current = true;
-    setThreadId(id as `${string}-${string}-${string}-${string}-${string}`);
-    threadIdRef.current = id as `${string}-${string}-${string}-${string}-${string}`;
+    setThreadId(id as ReturnType<typeof crypto.randomUUID>);
+    threadIdRef.current = id as ReturnType<typeof crypto.randomUUID>;
     setMessages(deserializeMessages(t.messages));
     setResumedSessionAt(t.updated_at ?? t.created_at ?? '');
-  }, [persistChat]);
+  }, [persistChat, applySessionAction]);
 
-  const newChatSession = useCallback(() => {
-    if (chatLoadingRef.current) return; // never swap sessions mid-stream
-    interactedRef.current = true;
+  // Swap to a fresh session, optionally bound to a Werkzeug — flushes the
+  // outgoing session first and returns the new thread id. No loading guard:
+  // sendMessage calls this mid-flight for the dock's lazy session switch.
+  const beginFreshSession = useCallback((action?: ChatSessionAction | null) => {
     persistChat(); // the outgoing session is safe in the store
-    sessionActionRef.current = null;
+    applySessionAction(action ?? null);
     sessionOriginRef.current = 'chat';
     chatDirtyRef.current = false;
     const fresh = crypto.randomUUID();
@@ -416,7 +457,16 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     threadIdRef.current = fresh;
     setMessages([]);
     setResumedSessionAt(null);
-  }, [persistChat]);
+    return fresh;
+  }, [persistChat, applySessionAction]);
+
+  // Started from the code drawer's dock, the fresh session is tagged with
+  // the viewed Werkzeug so it shows up under the dock's tool filter later.
+  const newChatSession = useCallback((action?: ChatSessionAction) => {
+    if (chatLoadingRef.current) return; // never swap sessions mid-stream
+    interactedRef.current = true;
+    beginFreshSession(action ?? null);
+  }, [beginFreshSession]);
 
   const deleteChatSessionFn = useCallback(async (id: string) => {
     if (id === threadIdRef.current && chatLoadingRef.current) return;
@@ -424,7 +474,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     setChatSessions(prev => prev.filter(s => s.id !== id));
     if (id === threadIdRef.current) {
       // Deleting the conversation you are in starts a fresh one
-      sessionActionRef.current = null;
+      applySessionAction(null);
       sessionOriginRef.current = 'chat';
       chatDirtyRef.current = false;
       const fresh = crypto.randomUUID();
@@ -462,7 +512,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     if (!silent) {
       setMessages(prev => [
         ...prev,
-        { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.identifier}${version != null ? ` (v${version})` : ''}` },
+        { id: crypto.randomUUID(), role: 'user', kind: 'action', content: `Aktion: ${action.title || action.identifier}${version != null ? ` (v${version})` : ''}` },
         { id: placeholderId, role: 'assistant', content: 'In Arbeit...' },
       ]);
     }
@@ -479,6 +529,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
           stdout: result.stdout,
           error: result.error,
           ts: Date.now(),
+          runId: result.runId,
         });
         if (silent) return;
         if (result.error) focusChatOnError();
@@ -488,9 +539,19 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
                 // Test-runs of a historical version get no auto-fix button —
                 // the fix agent edits the ACTIVE code, not the tested one
                 ? (version != null
-                    ? { content: execErrorUpdate(action, result.error, result.stdout).content }
-                    : execErrorUpdate(action, result.error, result.stdout, inputs, files))
-                : { content: result.stdout || '(no output)' }) }
+                    ? { content: execErrorUpdate(action, result.error, result.stdout).content, runId: result.runId ?? undefined }
+                    : execErrorUpdate(action, result.error, result.stdout, inputs, files, result.runId))
+                : {
+                    content: result.stdout || '(no output)',
+                    runId: result.runId ?? undefined,
+                    runInfo: {
+                      appId: action.app_id,
+                      actionIdentifier: action.identifier,
+                      actionName: action.title || action.identifier,
+                      version: version ?? null,
+                      status: 'ok' as const,
+                    },
+                  }) }
             : m)
         );
       })
@@ -576,13 +637,14 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
                 stdout: result.stdout,
                 error: result.error,
                 ts: Date.now(),
+                runId: result.runId,
               });
               return;
             }
             focusChatOnError();
             setMessages(prev => [
               ...prev,
-              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout) },
+              { id: crypto.randomUUID(), role: 'assistant', ...execErrorUpdate(action, result.error ?? '', result.stdout, undefined, undefined, result.runId) },
             ]);
             return;
           }
@@ -649,6 +711,10 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   const [codeDrawerAction, setCodeDrawerAction] = useState<Action | null>(null);
   const [codeDrawerFocus, setCodeDrawerFocus] = useState<CodeDrawerFocus | null>(null);
+  // What the drawer's chat dock shows: 'action' = the viewed Werkzeug's
+  // context (fresh empty state until the first send when the active session
+  // belongs elsewhere), 'global' = the currently active conversation.
+  const [dockScope, setDockScope] = useState<'action' | 'global'>('action');
   // The drawer's live timeline selection, mirrored here so sendMessage can
   // tell the agent which version is on screen. A ref (not state): read only
   // at send time, must not re-render the provider on every timeline click.
@@ -662,6 +728,9 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     // drawer stacks on top and ← returns to it, scroll position intact.
     setCodeDrawerFocus(focus ?? null);
     setCodeDrawerAction(action);
+    // The dock always starts in the viewed action's context — never a
+    // foreign conversation under foreign code
+    setDockScope('action');
   }, []);
 
   const openCodeDrawerFor = useCallback((appId: string, identifier: string, focus?: CodeDrawerFocus) => {
@@ -802,14 +871,20 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     chatLoadingRef.current = true;
     setChatLoading(true);
 
-    // Chatting while docked to the code drawer binds the session to that
-    // Werkzeug — the history list shows it as a tool chip
-    if (codeDrawerAction && !sessionActionRef.current) {
-      sessionActionRef.current = {
+    // Scoped dock showing the fresh empty state: the first send starts the
+    // promised fresh session, bound to the viewed Werkzeug (lazy switch —
+    // merely opening the drawer never touches the active conversation)
+    let baseMessages = messages;
+    let targetThread = threadId;
+    const sa = sessionActionRef.current;
+    if (codeDrawerAction && dockScope === 'action'
+        && !(sa && sa.app_id === codeDrawerAction.app_id && sa.identifier === codeDrawerAction.identifier)) {
+      targetThread = beginFreshSession({
         app_id: codeDrawerAction.app_id,
         identifier: codeDrawerAction.identifier,
         title: codeDrawerAction.title || codeDrawerAction.identifier,
-      };
+      });
+      baseMessages = [];
     }
 
     const userMsg: Message = {
@@ -829,11 +904,11 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     ]);
 
     try {
-      const apiMessages = messages
+      const apiMessages = baseMessages
         .concat(userMsg)
         .map(m => ({ role: m.role, content: m.content, image: m.image, imageName: m.imageName }));
 
-      await agentChat(apiMessages, threadId, (delta) => {
+      await agentChat(apiMessages, targetThread, (delta) => {
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantId ? { ...m, content: m.content + delta } : m,
@@ -868,7 +943,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       void refreshActions();
       window.dispatchEvent(new Event('dashboard-refresh'));
     }
-  }, [messages, threadId, refreshActions, releaseFixContexts, codeDrawerAction, handleCodeChanged]);
+  }, [messages, threadId, refreshActions, releaseFixContexts, codeDrawerAction, dockScope, beginFreshSession, handleCodeChanged]);
 
   const startFix = useCallback(async (ctx: ExecErrorContext, sourceMessageId: string | null) => {
     if (chatLoadingRef.current) return;
@@ -882,7 +957,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     // ARCHIVES the previous session (find it in the history), never wipes it.
     interactedRef.current = true;
     persistChat();
-    sessionActionRef.current = { app_id: ctx.appId, identifier: ctx.actionIdentifier, title: ctx.actionName };
+    applySessionAction({ app_id: ctx.appId, identifier: ctx.actionIdentifier, title: ctx.actionName });
     sessionOriginRef.current = 'fix';
     chatDirtyRef.current = false;
     setResumedSessionAt(null);
@@ -911,6 +986,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
           stdout: ctx.stdout,
           inputs: ctx.inputs,
           files: ctx.files,
+          runId: ctx.runId,
         },
         (content) => {
           answerText += content;
@@ -961,7 +1037,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       chatLoadingRef.current = false;
       setChatLoading(false);
     }
-  }, [refreshActions, handleCodeChanged, persistChat]);
+  }, [refreshActions, handleCodeChanged, persistChat, applySessionAction]);
 
   const fixError = useCallback((messageId: string) => {
     const ctx = messages.find(m => m.id === messageId)?.fixContext;
@@ -982,12 +1058,13 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
       stdout: run.stdout || undefined,
       inputs: run.inputs,
       files: run.files,
+      runId: run.runId ?? undefined,
     }, null);
   }, [lastRunResult, startFix]);
 
   return (
     <ActionsContext.Provider
-      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, chatSessions, activeThreadId: threadId, resumedSessionAt, refreshChatSessions, loadChatSession, newChatSession, deleteChatSession: deleteChatSessionFn, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, showActionInOverview, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
+      value={{ actions, chatOpen, setChatOpen, messages, chatLoading, runningActionId, runAction, lastRunResult, sendMessage, fixError, fixLastRun, fixingMessageId, chatSessions, activeThreadId: threadId, resumedSessionAt, refreshChatSessions, loadChatSession, newChatSession, deleteChatSession: deleteChatSessionFn, sessionAction, dockScope, setDockScope, devMode, setDevMode, betaMode, setBetaMode, showActionCode, actionsDrawerOpen, openActionsDrawer, closeActionsDrawer, codeDrawerAction, codeDrawerFocus, openCodeDrawer, openCodeDrawerFor, closeCodeDrawer, backToActions, showActionInOverview, reportCodeDrawerSelection, actionsHighlight, revertActionVersion, deleteAction: deleteActionFn, inputFormAction, inputFormOptions, submitActionInputs, cancelInputForm, files, filesByAction, freshFileIds, downloadFile, deleteAppAttachment: deleteAppAttachmentFn }}
     >
       {children}
     </ActionsContext.Provider>

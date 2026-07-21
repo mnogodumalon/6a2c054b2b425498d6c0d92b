@@ -133,7 +133,7 @@ export async function executeAction(
   // Test-run of a historical version (code from the history param);
   // omitted → the active version runs, exactly as before
   version?: number,
-): Promise<{ stdout: string | null; error: string | null }> {
+): Promise<{ stdout: string | null; error: string | null; runId: string | null }> {
   let resp: Response;
 
   if (inputs || (files && files.length > 0)) {
@@ -162,7 +162,13 @@ export async function executeAction(
   }
 
   const data = await resp.json();
-  return { stdout: data.stdout ?? null, error: data.error ?? null };
+  return {
+    stdout: data.stdout ?? null,
+    error: data.error ?? null,
+    // Trace correlator, present when the backend runs with tracing enabled
+    // (success AND error responses) — absent on older backends
+    runId: typeof data.run_id === 'string' ? data.run_id : null,
+  };
 }
 
 export async function deleteAction(
@@ -285,6 +291,14 @@ export interface StoredChatMessage {
     summary: string;
     origin: string;
   };
+  runInfo?: {
+    appId: string;
+    actionIdentifier: string;
+    actionName: string;
+    version?: number | null;
+    status: string;
+  };
+  runId?: string;
   [key: string]: unknown;
 }
 
@@ -484,6 +498,8 @@ export async function fixAction(
     stdout?: string;
     inputs?: Record<string, unknown>;
     files?: File[];
+    // Trace id of the failing /execute run — links fix.end to it server-side
+    runId?: string;
   },
   onContent: (content: string) => void,
   onCodeChanged?: (event: ActionCodeChangedEvent) => void,
@@ -496,6 +512,7 @@ export async function fixAction(
   formData.append("lang", LANG);
   formData.append("error", ctx.error);
   if (ctx.stdout) formData.append("stdout", ctx.stdout);
+  if (ctx.runId) formData.append("run_id", ctx.runId);
   if (ctx.inputs) formData.append("inputs", JSON.stringify(ctx.inputs));
   if (ctx.files) {
     // HEIC/HEIF → JPEG before upload (iPhone photos; server 500s on HEIC).

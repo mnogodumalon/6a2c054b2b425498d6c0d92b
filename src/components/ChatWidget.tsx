@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useCallback, type ReactElement } from 'react';
-import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode, IconBolt, IconChevronRight } from '@tabler/icons-react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactElement } from 'react';
+import { IconSparkles, IconX, IconSend, IconPaperclip, IconLoader2, IconFileTypePdf, IconFileSpreadsheet, IconMaximize, IconMinimize, IconWand, IconGitCommit, IconHistory, IconMessagePlus, IconMessageCircle, IconArrowLeft, IconSearch, IconTrash, IconCode, IconBolt, IconChevronRight, IconPlayerPlay, IconPhoto, IconFileText, IconExternalLink, IconHash } from '@tabler/icons-react';
 import { fileToDataUri } from '@/lib/ai';
 import { TypingDots } from '@/components/TypingDots';
 import { highlightPython, CopyButton } from '@/lib/highlight';
-import { useActions } from '@/context/ActionsContext';
+import { splitRunOutput, artifactKindFromExt, useArtifactProbes, openArtifact, type Artifact, type ArtifactProbe } from '@/lib/run-results';
+import { useActions, type RunInfo } from '@/context/ActionsContext';
 import type { ChatSessionMeta } from '@/lib/actions-agent';
 
 // ---------------------------------------------------------------------------
@@ -325,7 +326,7 @@ function VersionActionChip({ appId, identifier, version }: { appId: string; iden
   return (
     <button
       type="button"
-      title={`${title} — Werkzeug öffnen`}
+      title={`${title} — Aktion öffnen`}
       onClick={() => devMode
         ? openCodeDrawerFor(appId, identifier, { version, tab: 'code' })
         : showActionInOverview(appId, identifier)}
@@ -334,6 +335,128 @@ function VersionActionChip({ appId, identifier, version }: { appId: string; iden
       <IconBolt size={12} className="shrink-0" />
       <span className="min-w-0 truncate">{title}</span>
       <IconChevronRight size={12} className="shrink-0 opacity-60 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Run cards — a successful action run rendered as a structured card. The
+// result may be ANY JSON: URL values become typed artifact rows (image
+// preview, file card with open/download, plain link), the remaining fields
+// stay reachable as raw JSON. Compact sibling of the code drawer's output
+// tab, sharing the classification in @/lib/run-results.
+// ---------------------------------------------------------------------------
+
+function ArtifactResultRow({ artifact, probe }: { artifact: Artifact; probe?: ArtifactProbe }) {
+  const { downloadFile } = useActions();
+  const extKind = artifactKindFromExt(artifact);
+  const kind = extKind !== 'other' ? extKind : (probe?.kind ?? 'other');
+  const filename = probe?.filename || artifact.filename;
+  if (kind === 'page') {
+    return (
+      <a
+        href={artifact.url}
+        target="_blank"
+        rel="noopener"
+        className="inline-flex max-w-full items-center gap-1.5 self-start rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+      >
+        <IconExternalLink size={14} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate">{artifact.url}</span>
+      </a>
+    );
+  }
+  const Icon = kind === 'pdf' ? IconFileTypePdf : kind === 'image' ? IconPhoto : IconFileText;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {kind === 'image' && (
+        <img src={artifact.url} alt={filename} className="max-h-36 max-w-full self-start rounded-lg border border-border" />
+      )}
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5">
+        <Icon size={16} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{filename}</span>
+        <button
+          type="button"
+          onClick={() => openArtifact(artifact.url, probe?.attachment)}
+          className="shrink-0 text-xs font-semibold text-primary hover:underline"
+        >
+          Öffnen
+        </button>
+        <button
+          type="button"
+          onClick={() => void downloadFile(artifact.url, filename)}
+          className="shrink-0 text-xs font-semibold text-primary hover:underline"
+        >
+          Herunterladen
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function RunResultCard({ info, raw }: { info: RunInfo; raw: string }) {
+  const { artifacts, rest } = useMemo(() => splitRunOutput(raw), [raw]);
+  const probeUrls = useMemo(
+    () => artifacts.filter(a => artifactKindFromExt(a) === 'other').map(a => a.url),
+    [artifacts],
+  );
+  const probes = useArtifactProbes(probeUrls);
+  // The remainder decides its own shape: JSON renders structured, plain text
+  // renders as markdown (an action may simply print a sentence)
+  const restIsJson = useMemo(() => {
+    if (!rest) return false;
+    try { const p = JSON.parse(rest); return !!p && typeof p === 'object'; } catch { return false; }
+  }, [rest]);
+  return (
+    <div className="mt-1.5 w-full max-w-[85%] rounded-xl border border-border bg-card px-3.5 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <IconPlayerPlay size={13} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+          {info.actionName}{info.version != null ? ` (v${info.version})` : ''}
+        </span>
+        <span className="shrink-0 rounded-full border border-green-200 bg-green-50 px-1.5 py-px text-[10px] font-semibold text-green-700">
+          ✓ Ausgeführt
+        </span>
+      </div>
+      {(artifacts.length > 0 || rest) && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {artifacts.map(a => <ArtifactResultRow key={a.url} artifact={a} probe={probes[a.url]} />)}
+          {rest && (artifacts.length > 0 ? (
+            <details className="border-t border-dashed border-border pt-1.5">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground select-none">Details (JSON)</summary>
+              <JsonView text={rest} />
+            </details>
+          ) : restIsJson ? (
+            <JsonView text={rest} />
+          ) : (
+            <div className="text-sm leading-relaxed"><ChatMarkdown content={rest} /></div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Support correlator: quiet copy chip for a run's trace id. Desktop reveals
+// it on hover of the message (or keyboard focus); on touch it stays visible
+// but tiny and muted. Renders nothing when the backend sent no run id.
+export function RunIdChip({ runId, className = '' }: { runId: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Run-ID kopieren — bei Problemen für den Support angeben"
+      onClick={() => {
+        void navigator.clipboard?.writeText(runId).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+      }}
+      className={`inline-flex items-center gap-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/60 transition-opacity hover:text-muted-foreground focus-visible:opacity-100 ${className}`}
+    >
+      <IconHash size={10} className="shrink-0" />
+      {copied ? 'Kopiert!' : runId}
     </button>
   );
 }
@@ -377,10 +500,14 @@ const GROUP_LABELS: Record<'today' | 'yesterday' | 'older', string> = {
   older: 'Älter',
 };
 
-export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
+export function ChatHistoryList({ filterAction, onSelect, onNewChat, compact = false }: {
   // Only sessions bound to this Werkzeug (the code drawer's filter)
   filterAction?: { appId: string; identifier: string } | null;
-  onSelect?: () => void;
+  // Receives the chosen session so the dock can sync its scope chip
+  onSelect?: (s?: ChatSessionMeta) => void;
+  // Renders a start-fresh CTA in the empty state — without it the list is
+  // a dead end exactly when there is nothing to resume
+  onNewChat?: () => void;
   compact?: boolean;
 }) {
   const { chatSessions, activeThreadId, loadChatSession, deleteChatSession, refreshChatSessions } = useActions();
@@ -426,6 +553,16 @@ export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
           <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-muted-foreground">
             <IconHistory size={24} stroke={1.5} />
             <p className="text-xs">Noch keine Unterhaltungen</p>
+            {onNewChat && (
+              <button
+                type="button"
+                onClick={onNewChat}
+                className="mt-1 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+              >
+                <IconMessagePlus size={13} />
+                Neuer Chat
+              </button>
+            )}
           </div>
         )}
         {groups.map(group => (
@@ -435,7 +572,7 @@ export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
               <div key={s.id} className="group relative">
                 <button
                   type="button"
-                  onClick={() => { void loadChatSession(s.id); onSelect?.(); }}
+                  onClick={() => { void loadChatSession(s.id); onSelect?.(s); }}
                   className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${s.id === activeThreadId ? 'bg-accent' : 'hover:bg-muted/60'}`}
                 >
                   <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${s.id === activeThreadId ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
@@ -499,8 +636,16 @@ export function ChatHistoryList({ filterAction, onSelect, compact = false }: {
 // ---------------------------------------------------------------------------
 
 export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...', autoFocus = false, collapsed = false }: { placeholder?: string; autoFocus?: boolean; collapsed?: boolean }) {
-  const { messages, chatLoading, runningActionId, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion, chatSessions, activeThreadId, loadChatSession, resumedSessionAt } = useActions();
+  const { messages, chatLoading, runningActionId, sendMessage, fixError, fixingMessageId, devMode, openCodeDrawerFor, revertActionVersion, chatSessions, activeThreadId, loadChatSession, resumedSessionAt, codeDrawerAction, dockScope, setDockScope, sessionAction } = useActions();
   const [input, setInput] = useState('');
+
+  // Scoped dock: the drawer is open in the action's context, but the active
+  // session belongs elsewhere — show the fresh empty state instead of a
+  // foreign transcript; the first send starts the tagged session (the lazy
+  // switch lives in sendMessage).
+  const sessionMatchesDrawer = !!(codeDrawerAction && sessionAction
+    && sessionAction.app_id === codeDrawerAction.app_id && sessionAction.identifier === codeDrawerAction.identifier);
+  const scopedFresh = !!codeDrawerAction && dockScope === 'action' && !sessionMatchesDrawer;
   const [image, setImage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -557,6 +702,41 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
     <>
       {/* Messages (hidden while docked-collapsed — the composer stays) */}
       <div ref={scrollRef} className={collapsed ? 'hidden' : 'flex-1 overflow-y-auto px-4 py-3 space-y-3'}>
+        {scopedFresh ? (
+          <div className="flex flex-col items-center justify-center h-full text-center gap-2 text-muted-foreground">
+            <IconBolt size={28} stroke={1.5} className="text-primary" />
+            <p className="text-xs max-w-[280px]">Frag etwas zu dieser Aktion — die Antwort kennt Code und Versionen.</p>
+            <div className="mt-1 flex flex-wrap justify-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => sendMessage('Was macht diese Aktion?')}
+                className="rounded-full border border-primary/40 bg-card px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+              >
+                Was macht diese Aktion?
+              </button>
+              <button
+                type="button"
+                onClick={() => sendMessage('Erkläre mir den Code')}
+                className="rounded-full border border-primary/40 bg-card px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+              >
+                Erkläre mir den Code
+              </button>
+            </div>
+          </div>
+        ) : (
+        <>
+        {codeDrawerAction && dockScope === 'global' && !sessionMatchesDrawer && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-dashed border-border bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+            <span>
+              {sessionAction
+                ? <>Diese Unterhaltung gehört zu <span className="font-medium text-foreground">„{sessionAction.title || sessionAction.identifier}"</span></>
+                : 'Allgemeine Unterhaltung ohne Aktions-Bezug'}
+            </span>
+            <button type="button" onClick={() => setDockScope('action')} className="font-semibold text-primary hover:underline">
+              Neue Unterhaltung zu dieser Aktion
+            </button>
+          </div>
+        )}
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-2 text-muted-foreground">
             <IconSparkles size={28} stroke={1.5} />
@@ -568,7 +748,13 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => void loadChatSession(s.id)}
+                    onClick={() => {
+                      void loadChatSession(s.id);
+                      // In the dock, keep the context chip in sync with the
+                      // loaded session — otherwise the scoped empty state
+                      // would hide the transcript it just loaded
+                      if (codeDrawerAction) setDockScope(s.action && s.action.app_id === codeDrawerAction.app_id && s.action.identifier === codeDrawerAction.identifier ? 'action' : 'global');
+                    }}
                     className="mb-1.5 flex w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/50"
                   >
                     {s.ai?.emoji ? (
@@ -595,8 +781,10 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
         )}
         {messages.map((m) => (
           m.role === 'assistant' && !m.content && !m.versionInfo ? null :
-          <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-            {(m.content || m.role === 'user') && (
+          <div key={m.id} className={`group flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+            {m.runInfo && m.role === 'assistant' ? (
+              <RunResultCard info={m.runInfo} raw={m.content} />
+            ) : (m.content || m.role === 'user') && (
               <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
                 m.role === 'user'
                   ? m.kind === 'action'
@@ -682,6 +870,9 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
                 </div>
               </div>
             )}
+            {m.runId && (
+              <RunIdChip runId={m.runId} className="mt-1 sm:opacity-0 sm:group-hover:opacity-100" />
+            )}
           </div>
         ))}
         {chatLoading && messages.length > 0 && messages[messages.length - 1].content !== 'In Arbeit...' && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content === '' && (
@@ -691,6 +882,8 @@ export function ChatPanel({ placeholder = 'Frage stellen oder Bild hochladen...'
               Denkt nach...
             </div>
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -863,7 +1056,7 @@ export default function ChatWidget() {
           </div>
 
           {view === 'history' ? (
-            <ChatHistoryList onSelect={() => setView('chat')} />
+            <ChatHistoryList onSelect={() => setView('chat')} onNewChat={() => { newChatSession(); setView('chat'); }} />
           ) : (
             <ChatPanel autoFocus={chatOpen} />
           )}

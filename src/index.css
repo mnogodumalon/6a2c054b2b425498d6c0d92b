@@ -170,11 +170,17 @@
  * Applied via animate-[action-return_2s_ease-out_0.25s_both] — the delay
  * lets the drawer's slide-in finish first, `both` shows the tint from the
  * first paint. The second shadow keeps the card's resting shadow-sm alive
- * while the ring fades. */
+ * while the ring fades.
+ *
+ * The colors are pre-mixed literals, NOT color-mix(): the sandbox build
+ * pipeline silently strips hand-written color-mix() declarations (its CSS
+ * toolchain is older than local), which emptied this frame and made the
+ * whole spotlight a no-op. #faece5 = --primary 10% over --card,
+ * #d1460073 = --primary at 45% — re-derive both if the theme changes. */
 @keyframes action-return {
   0%, 35% {
-    background-color: color-mix(in srgb, var(--primary) 10%, var(--card));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent),
+    background-color: #faece5;
+    box-shadow: 0 0 0 3px #d1460073,
       0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
   100% {
