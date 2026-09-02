@@ -1,0 +1,48 @@
+import type { BeitraegeZahlungen, Mitglieder } from '@/types/app';
+import { APP_IDS } from '@/types/app';
+import { extractRecordId } from '@/services/livingAppsService';
+import {
+  RecordSection, RecordField, RecordRelation, RecordAttachments,
+} from '@/components/widgets/RecordView';
+import { t, appLabel, fieldLabel } from '@/i18n';
+
+export interface BeitraegeZahlungenDetailsProps {
+  /** Der Record — enriched oder roh; alle Felder werden hier gerendert. */
+  record: BeitraegeZahlungen;
+  /** N:1-Ziel „Mitglieder": volle Liste (Hook-Array) — der Block löst Name + Schlüsselfelder selbst auf. */
+  mitgliederList: Mitglieder[];
+  /** Klick auf die Mitglieder-Relation → overlay.push auf dessen Detail. */
+  onOpenMitglieder?: (record: Mitglieder) => void;
+}
+
+export function BeitraegeZahlungenDetails({
+  record,
+  mitgliederList,
+  onOpenMitglieder,
+}: BeitraegeZahlungenDetailsProps) {
+  const mitgliedTarget = mitgliederList.find(r => r.record_id === extractRecordId(record.fields.mitglied));
+  return (
+    <>
+      <RecordSection title={t('details')} cols={2}>
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'beitragsjahr')} value={record.fields.beitragsjahr} format="text" />
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'beitragshoehe')} value={record.fields.beitragshoehe} format="text" />
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'zahlungsart')} value={record.fields.zahlungsart} format="pill" />
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'zahlungsdatum')} value={record.fields.zahlungsdatum} format="date" />
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'zahlungsstatus')} value={record.fields.zahlungsstatus} format="pill" />
+        <RecordField label={fieldLabel('beitraege_zahlungen', 'bemerkungen_zahlung')} value={record.fields.bemerkungen_zahlung} format="longtext" className="md:col-span-2" />
+      </RecordSection>
+
+      {/* N:1 — verknüpfte Records: IMMER klickbar, nie eine Text-Sackgasse. */}
+      <RecordSection title={t('relations')} cols={1}>
+        <RecordRelation
+          label={fieldLabel('beitraege_zahlungen', 'mitglied')}
+          name={mitgliedTarget?.fields.vorname ?? '—'}
+          meta={[mitgliedTarget?.fields.email, mitgliedTarget?.fields.telefon].filter(Boolean).join(' · ') || undefined}
+          onClick={mitgliedTarget && onOpenMitglieder ? () => onOpenMitglieder!(mitgliedTarget!) : undefined}
+        />
+      </RecordSection>
+
+      <RecordAttachments appId={APP_IDS.BEITRAEGE_ZAHLUNGEN} recordId={record.record_id} />
+    </>
+  );
+}

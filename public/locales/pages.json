@@ -1,0 +1,26 @@
+{
+  "pages": {
+    "en": {
+      "Alle Beiträge bezahlt — super!": "All contributions paid — great!",
+      "Als bezahlt markieren": "Mark as Paid",
+      "Anmeldung": "Registration",
+      "Beitrag erfassen": "Record Contribution",
+      "Bezahlt": "Paid",
+      "Keine Veranstaltungen in den nächsten 30 Tagen.": "No events in the next 30 days.",
+      "Kommende Veranstaltungen": "Upcoming Events",
+      "Neue Veranstaltung": "New Event",
+      "Nächste Veranstaltung: {0} am {1}": "Next Event: {0} on {1}",
+      "Offene Beiträge": "Outstanding Contributions",
+      "Ohne Titel": "Untitled",
+      "TN": "Att.",
+      "Unbekanntes Mitglied": "Unknown Member",
+      "Willkommen! Lege jetzt die ersten Mitglieder und Veranstaltungen an.": "Welcome! Start by adding your first members and events.",
+      "{0} Anmeldung{1}": "{0} Registration{1}",
+      "{0} aktive Mitglieder — keine Veranstaltungen in den nächsten 30 Tagen.": "{0} active members — no events in the next 30 days.",
+      "{0} — Zahlung als bezahlt markiert": "{0} — Payment marked as paid",
+      "{0} — verschoben": "{0} — postponed",
+      "— {0} gemahnte Beiträge offen ({1})": "— {0} overdue contributions outstanding ({1})"
+    }
+  },
+  "v": 1
+}

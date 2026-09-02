@@ -1,0 +1,12 @@
+{
+  "pages": [
+    {
+      "file": "src/pages/public/MitgliedRegistrieren.tsx",
+      "component": "MitgliedRegistrieren",
+      "slug": "mitglied-registrieren",
+      "ok": true,
+      "blocked": false,
+      "error": null
+    }
+  ]
+}

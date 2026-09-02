@@ -1,0 +1,45 @@
+{
+  "VeranstaltungsteilnahmenDialog.tsx": {
+    "mitglied": "Mitglied wählen",
+    "veranstaltung": "Welche Veranstaltung?",
+    "anmeldedatum": "Wann angemeldet?",
+    "anwesenheit": "Teilnahme bestätigt?",
+    "bemerkungen_teilnahme": "Notizen zur Teilnahme..."
+  },
+  "VeranstaltungenDialog.tsx": {
+    "titel": "z. B. Workshop KI Basics",
+    "beschreibung": "Inhalte, Agenda, Themen...",
+    "datum_uhrzeit": "Wann findet die Veranstaltung statt?",
+    "anmeldeschluss": "Letzter Anmeldetermin",
+    "veranstaltungsart": "z. B. Vortrag, Workshop",
+    "veranstaltungsort": "z. B. Universität Bayreuth",
+    "max_teilnehmer": "z. B. 50",
+    "verantwortlicher": "Name der verantwortlichen Person",
+    "bemerkungen_veranstaltung": "Weitere Infos, Besonderheiten..."
+  },
+  "MitgliederDialog.tsx": {
+    "vorname": "z. B. Max",
+    "nachname": "z. B. Mustermann",
+    "email": "z. B. max@example.com",
+    "telefon": "z. B. 0921 55555",
+    "geburtsdatum": "Wann geboren?",
+    "strasse": "z. B. Hauptstraße",
+    "hausnummer": "z. B. 42",
+    "plz": "z. B. 95444",
+    "ort": "z. B. Bayreuth",
+    "mitgliedsnummer": "z. B. M-2026-001",
+    "eintrittsdatum": "Wann beigetreten?",
+    "mitgliedsstatus": "z. B. Aktiv, Passiv",
+    "iban": "z. B. DE89 3704 0044 0532 0130 00",
+    "bemerkungen": "Notizen zum Mitglied..."
+  },
+  "BeitraegeZahlungenDialog.tsx": {
+    "mitglied": "Mitglied wählen",
+    "beitragsjahr": "z. B. 2026",
+    "beitragshoehe": "z. B. 50,00",
+    "zahlungsart": "z. B. Überweisung, Lastschrift",
+    "zahlungsdatum": "Wann bezahlt?",
+    "zahlungsstatus": "z. B. Offen, Bezahlt",
+    "bemerkungen_zahlung": "Notizen zur Zahlung..."
+  }
+}

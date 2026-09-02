@@ -1,0 +1,27 @@
+{
+  "slug": "mitglied-registrieren",
+  "component": "MitgliedRegistrieren",
+  "title": "Mitglied werden",
+  "endpoints": [
+    {
+      "entity": "mitglieder",
+      "op": "create",
+      "fields": [
+        "vorname",
+        "nachname",
+        "email",
+        "telefon",
+        "geburtsdatum",
+        "strasse",
+        "hausnummer",
+        "plz",
+        "ort",
+        "iban"
+      ],
+      "preset_fields": {
+        "eintrittsdatum": "__today__",
+        "mitgliedsstatus": "aktiv"
+      }
+    }
+  ]
+}
