@@ -6,6 +6,7 @@ import {
 } from '@/components/widgets/RecordView';
 import { t, appLabel, fieldLabel } from '@/i18n';
 import { SatelliteSection } from '@/components/SatelliteSection';
+import { usePermissions } from '@/lib/permissions';
 
 export interface MitgliederDetailsProps {
   /** Der Record — enriched oder roh; alle Felder werden hier gerendert. */
@@ -15,13 +16,13 @@ export interface MitgliederDetailsProps {
   /** Zeilen-Klick → overlay.push auf das Veranstaltungsteilnahmen-Detail (nie der Edit-Dialog). */
   onOpenVeranstaltungsteilnahmen: (record: Veranstaltungsteilnahmen) => void;
   /** Kontextuelles „+": öffnet den Veranstaltungsteilnahmen-Dialog mit diesem Record vorgesetzt. */
-  onAddVeranstaltungsteilnahmen: () => void;
+  onAddVeranstaltungsteilnahmen?: () => void;
   /** 1:N „Beiträge & Zahlungen" (mitglied): VOLLE Liste — der Block filtert auf diesen Record. */
   beitraegeZahlungenList: BeitraegeZahlungen[];
   /** Zeilen-Klick → overlay.push auf das BeitraegeZahlungen-Detail (nie der Edit-Dialog). */
   onOpenBeitraegeZahlungen: (record: BeitraegeZahlungen) => void;
   /** Kontextuelles „+": öffnet den BeitraegeZahlungen-Dialog mit diesem Record vorgesetzt. */
-  onAddBeitraegeZahlungen: () => void;
+  onAddBeitraegeZahlungen?: () => void;
 }
 
 export function MitgliederDetails({
@@ -33,6 +34,8 @@ export function MitgliederDetails({
   onOpenBeitraegeZahlungen,
   onAddBeitraegeZahlungen,
 }: MitgliederDetailsProps) {
+  // attachments are a write to this record — read-only without the platform right
+  const perms = usePermissions();
   return (
     <>
       <RecordSection title={t('details')} cols={2}>
@@ -70,7 +73,7 @@ export function MitgliederDetails({
         getKey={r => r.record_id}
       />
 
-      <RecordAttachments appId={APP_IDS.MITGLIEDER} recordId={record.record_id} />
+      <RecordAttachments appId={APP_IDS.MITGLIEDER} recordId={record.record_id} readOnly={!perms.canWrite('mitglieder')} />
     </>
   );
 }

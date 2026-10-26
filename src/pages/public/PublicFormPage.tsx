@@ -11,6 +11,7 @@ import { DatePicker } from '@/components/DatePicker';
 import { AddressAutocomplete } from '@/components/AddressAutocomplete';
 import { AvailabilityRangePicker, rangeIsFree } from '@/components/blocks/AvailabilityRangePicker';
 import { ChoiceGroup } from '@/components/blocks/ChoiceGroup';
+import { FileField } from '@/components/blocks/FileField';
 import { FieldErrorSummary } from '@/components/blocks/FieldErrorSummary';
 import { SuccessStep } from '@/components/blocks/SuccessStep';
 // Feldlabels/Options folgen der Besucher-Browsersprache über das Bundle;
@@ -40,6 +41,7 @@ import {
   type StepForm,
 } from '@/lib/journey';
 import { createPublicPort } from '@/lib/journey/publicPort';
+import { requiredMessage } from '@/lib/journey/messages';
 
 // Public form page — the anonymous side of "Öffentliche Formulare".
 //
@@ -73,7 +75,7 @@ const PENDING_PORT: JourneyPort = {
   },
   // A count is a question, not a write: an unloaded door answers "cannot
   // count" (the public door's permanent answer) rather than throwing.
-  count: async () => null,
+  count: async () => null, get: async () => null,
   create: async () => {
     throw new JourneyPortError('public page config not loaded yet');
   },
@@ -106,6 +108,10 @@ function FieldInput({ field, appId, form, smallLookup, refOptions, refLoading, o
   const options = field.options ?? [];
   const key = field.key;
 
+  // a document the visitor sends: it travels in the create (lib/journey/upload)
+  if (ft === 'file' || ft.startsWith('file/')) {
+    return <FileField {...form.file(key)} />;
+  }
   if (ft.includes('applookup')) {
     if (refLoading) {
       return <IconLoader2 size={18} stroke={1.5} className="animate-spin text-muted-foreground" />;
@@ -273,7 +279,8 @@ export default function PublicFormPage() {
     if (range?.resource) map[range.resource] = true;
     return map;
   }, [page, range]);
-  const form = useStepForm(entity, { fields: fieldKeys, required: requiredMap, id: 'pf' });
+  // Visitors type their OWN data here — browser autofill on (the internal flows leave it off).
+  const form = useStepForm(entity, { fields: fieldKeys, required: requiredMap, id: 'pf', autoComplete: true });
 
   const port = useMemo(() => (config && page ? createPublicPort(config, page) : PENDING_PORT), [config, page]);
   const submit = useJourneySubmit(port, [{ key: 'eintrag', entity, form, primary: true }]);
@@ -393,8 +400,11 @@ export default function PublicFormPage() {
     const err = submit.error;
     if (!err || err instanceof PageUnavailableError) return null;
     if (err instanceof FieldValidationError) {
+      // The client validates first, so this is the rare server-side catch —
+      // it still says per field what to do (the agent's sentence), never
+      // "Dieses Feld ist erforderlich: a, b".
       return err.missingFields.length > 0 && err.unallowedFields.length === 0
-        ? `${t('pf_required_error_text')}: ${err.missingFields.map(k => fieldLabelByAppId(page?.app_id ?? '', k) ?? k).join(', ')}`
+        ? err.missingFields.map(k => requiredMessage(entity, k)).join(' ')
         : t('pf_error_generic_text');
     }
     if (err instanceof RateLimitedError) return t('pf_rate_limit_text');

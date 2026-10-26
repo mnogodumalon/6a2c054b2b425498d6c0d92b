@@ -11,6 +11,7 @@
 // Usage:
 //   node scripts/wire-intent.mjs <PageComponent> <slug> <label> <IconName> [description]
 //   node scripts/wire-intent.mjs --no-flows
+//   node scripts/wire-intent.mjs --remove <PageComponent> <slug>   # quarantine: undo exactly one wire
 //
 // Examples:
 //   node scripts/wire-intent.mjs NeueBuchungPage neue-buchung 'Neue Buchung' IconCalendarPlus 'Buchung in 3 Schritten anlegen'
@@ -46,6 +47,54 @@ if (args[0] === '--no-flows') {
     writeFileSync(REGISTRY, out);
     console.log('wire-intent: INTENTS_PENDING → false (ghost rows cleared, no flows registered)');
   }
+  process.exit(0);
+}
+
+if (args[0] === '--remove') {
+  // Quarantine: undo exactly what one wire did — the three single lines it
+  // inserted (lazy import, <Route>, registry entry) plus the icon import and
+  // the skeleton import when nothing else uses them. Line-based on purpose:
+  // insertBeforeMarker writes each of them as ONE line of its own, so a line
+  // filter is the exact inverse. INTENTS_PENDING stays false — a quarantined
+  // flow is "not built", not "being built".
+  const [, rpage, rslug] = args;
+  if (!rpage || !rslug) fail('usage: node scripts/wire-intent.mjs --remove <PageComponent> <slug>');
+  if (!/^[A-Z][A-Za-z0-9]*$/.test(rpage)) fail(`'${rpage}' is not a PascalCase component name`);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rslug)) fail(`'${rslug}' is not a kebab-case slug`);
+  const dropLines = (src, pred) => src.split('\n').filter(l => !pred(l)).join('\n');
+  const removed = [];
+
+  let app = read(APP);
+  const appBefore = app;
+  app = dropLines(app, l => l.includes(`import('@/pages/intents/${rpage}')`));
+  app = dropLines(app, l => new RegExp(`<Route\\s+path=["']intents/${rslug}["']`).test(l));
+  if (!/<Route\s+path=["']intents\//.test(app) && (app.match(/\bDashboardSkeleton\b/g) || []).length === 1) {
+    app = dropLines(app, l => l.includes("from '@/components/DashboardStates'"));
+  }
+  if (app !== appBefore) { writeFileSync(APP, app); removed.push(`${APP}: import + route of ${rpage} (#/intents/${rslug})`); }
+
+  let reg = read(REGISTRY);
+  const regBefore = reg;
+  const entryRe = new RegExp(`^\\s*\\{\\s*path: '/intents/${rslug}'`);
+  const entryLine = reg.split('\n').find(l => entryRe.test(l));
+  reg = dropLines(reg, l => entryRe.test(l));
+  const iconUsed = entryLine ? /icon:\s*(Icon[A-Za-z0-9]+)/.exec(entryLine) : null;
+  if (iconUsed) {
+    const icon = iconUsed[1];
+    const outsideImports = reg.split('\n').filter(l => !/^\s*import\s/.test(l)).join('\n');
+    if (!new RegExp(`\\b${icon}\\b`).test(outsideImports)) {
+      reg = reg.split('\n').map(l => {
+        const m = /^(\s*)import \{ ([^}]*) \} from '@tabler\/icons-react';$/.exec(l);
+        if (!m) return l;
+        const names = m[2].split(',').map(s => s.trim()).filter(n => n && n !== icon);
+        return names.length ? `${m[1]}import { ${names.join(', ')} } from '@tabler/icons-react';` : null;
+      }).filter(l => l !== null).join('\n');
+    }
+  }
+  if (reg !== regBefore) { writeFileSync(REGISTRY, reg); removed.push(`${REGISTRY}: entry /intents/${rslug}${iconUsed ? ' (+ icon import if unused)' : ''}`); }
+
+  for (const r of removed) console.log(`wire-intent: - ${r}`);
+  console.log(`wire-intent: OK (removed ${rpage} ↔ #/intents/${rslug})`);
   process.exit(0);
 }
 
@@ -155,27 +204,78 @@ if (new RegExp(`\\b${icon}\\b`).test(importBlock[1])) {
 const entriesBlock = /\/\/ <custom:intents>([\s\S]*?)\/\/ <\/custom:intents>/.exec(reg);
 if (!entriesBlock) fail(`${REGISTRY}: marker '// <custom:intents>' not found — restore the marker block before wiring`);
 
-if (entriesBlock[1].includes(`path: '/intents/${slug}'`)) {
-  same.push(`${REGISTRY}: entry /intents/${slug} already present`);
-} else {
-  // Label: preferred is a JSON object with both UI languages
-  // ('{"de":"Neue Buchung","en":"New booking"}');
-  // a plain string stays valid and renders unchanged in every language.
-  let labelLiteral = `'${esc(label)}'`;
-  if (label.trim().startsWith('{')) {
-    let parsed;
-    try { parsed = JSON.parse(label); } catch { fail(`label looks like JSON but does not parse: ${label}`); }
-    const parts = ['de', 'en', 'cs']
-      .filter((l) => typeof parsed[l] === 'string' && parsed[l].trim())
-      .map((l) => `${l}: '${esc(parsed[l])}'`);
-    if (!parts.length) fail(`label JSON must carry at least one of de/en/cs: ${label}`);
-    labelLiteral = `{ ${parts.join(', ')} }`;
+// Label and description: preferred is a JSON object with both UI languages
+// ('{"de":"Neue Buchung","en":"New booking"}'); a plain string stays valid and
+// renders unchanged in every language. `literalOf` renders either form.
+function literalOf(text, what) {
+  if (!text.trim().startsWith('{')) return `'${esc(text)}'`;
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { fail(`${what} looks like JSON but does not parse: ${text}`); }
+  const parts = ['de', 'en', 'cs']
+    .filter((l) => typeof parsed[l] === 'string' && parsed[l].trim())
+    .map((l) => `${l}: '${esc(parsed[l])}'`);
+  if (!parts.length) fail(`${what} JSON must carry at least one of de/en/cs: ${text}`);
+  return `{ ${parts.join(', ')} }`;
+}
+// The German (or only) text of a registry literal — what an owner sees, and
+// what decides whether a re-wire is a change or a no-op.
+function deOf(literal) {
+  if (literal === undefined || literal === null) return '';
+  const t = literal.trim();
+  if (t.startsWith('{')) {
+    const m = /\bde:\s*'((?:[^'\\]|\\.)*)'/.exec(t) || /\b(?:en|cs):\s*'((?:[^'\\]|\\.)*)'/.exec(t);
+    return m ? m[1] : '';
   }
-  const desc = description ? `, description: '${esc(description)}'` : '';
-  reg = insertBeforeMarker(
-    reg, '// </custom:intents>',
-    `{ path: '/intents/${slug}', label: ${labelLiteral}, icon: ${icon}${desc} },`, REGISTRY,
-  );
+  return t.replace(/^'|'$/g, '');
+}
+const labelLiteral = literalOf(label, 'label');
+const desc = description ? `, description: ${literalOf(description, 'description')}` : '';
+const newEntry = `{ path: '/intents/${slug}', label: ${labelLiteral}, icon: ${icon}${desc} },`;
+
+const existingRe = new RegExp(`^([ \\t]*)\\{\\s*path: '/intents/${slug}'.*$`, 'm');
+const existing = existingRe.exec(entriesBlock[1]);
+if (existing) {
+  // A re-wire of a known slug (the page job's EDIT): the entry is replaced
+  // only when what the owner sees changes — label, icon or description. An
+  // identical re-wire is a no-op, so the runtime-translated object the i18n
+  // step wrote (description: { de, en }) is never overwritten by the plain
+  // German string an unchanged edit passes.
+  const line = existing[0];
+  const field = (name) => {
+    const m = new RegExp(`\\b${name}:\\s*(\\{[^}]*\\}|'(?:[^'\\\\]|\\\\.)*')`).exec(line);
+    return m ? m[1] : undefined;
+  };
+  const oldIconMatch = /\bicon:\s*(Icon[A-Za-z0-9]+)/.exec(line);
+  const oldIcon = oldIconMatch ? oldIconMatch[1] : undefined;
+  const changed =
+    deOf(field('label')) !== deOf(labelLiteral) ||
+    oldIcon !== icon ||
+    (description ? deOf(field('description')) !== deOf(literalOf(description, 'description')) : false);
+  if (!changed) {
+    same.push(`${REGISTRY}: entry /intents/${slug} already present`);
+  } else {
+    const updatedBlock = entriesBlock[0].replace(line, `${existing[1]}${newEntry}`);
+    reg = reg.replace(entriesBlock[0], updatedBlock);
+    done.push(`${REGISTRY}: entry /intents/${slug} updated (label/icon/description)`);
+    if (oldIcon && oldIcon !== icon) {
+      const entriesNow = /\/\/ <custom:intents>([\s\S]*?)\/\/ <\/custom:intents>/.exec(reg);
+      if (entriesNow && !new RegExp(`\\b${oldIcon}\\b`).test(entriesNow[1])) {
+        const ib = /\/\/ <custom:intent-imports>([\s\S]*?)\/\/ <\/custom:intent-imports>/.exec(reg);
+        if (ib) {
+          const cleaned = ib[0]
+            .replace(new RegExp(`\\b${oldIcon}\\s*,\\s*`), '')
+            .replace(new RegExp(`,\\s*\\b${oldIcon}\\b`), '')
+            .replace(new RegExp(`^import \\{\\s*${oldIcon}\\s*\\} from '@tabler/icons-react';\\n?`, 'm'), '');
+          if (cleaned !== ib[0]) {
+            reg = reg.replace(ib[0], cleaned);
+            done.push(`${REGISTRY}: import ${oldIcon} dropped (unused)`);
+          }
+        }
+      }
+    }
+  }
+} else {
+  reg = insertBeforeMarker(reg, '// </custom:intents>', newEntry, REGISTRY);
   done.push(`${REGISTRY}: entry /intents/${slug}`);
 }
 

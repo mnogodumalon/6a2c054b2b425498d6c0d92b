@@ -33,8 +33,41 @@ function resolveOrigin(): string {
 /** Scheme + host of the Living Apps instance this dashboard runs on. No trailing slash. */
 export const LA_ORIGIN: string = resolveOrigin();
 
-/** Authenticated REST API (session cookie, `credentials: 'include'`). */
-export const REST_URL = `${LA_ORIGIN}/rest`;
+/** Authenticated REST API (session cookie, `credentials: 'include'`). The
+ *  path names the API generation the backend that built this dashboard runs
+ *  on (`/rest` = v0, `/rest/v1`): reference values (applookups, created_by)
+ *  carry it, and each generation rejects the other's reference URLs on
+ *  writes — so the dashboard never switches generations on its own. */
+export const REST_URL = `${LA_ORIGIN}/rest/v1`;
+
+/** v1 serves at most 3 requests of one user at the same time: the 4th is a
+ *  429 `too_many_concurrent_requests` (no quota — the next request is taken
+ *  as soon as one finishes). Every authenticated REST call goes through this
+ *  gate: three in flight, the rest queued in order; a 429 waits and is sent
+ *  again, bounded. */
+const MAX_IN_FLIGHT = 3;
+let inFlight = 0;
+const waiting: Array<() => void> = [];
+function acquire(): Promise<void> {
+  if (inFlight < MAX_IN_FLIGHT) { inFlight++; return Promise.resolve(); }
+  return new Promise(resolve => waiting.push(() => { inFlight++; resolve(); }));
+}
+function release(): void {
+  inFlight--;
+  const next = waiting.shift();
+  if (next) next();
+}
+export async function restFetch(input: string, init?: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    await acquire();
+    let res: Response;
+    try { res = await fetch(input, init); } finally { release(); }
+    if (res.status !== 429 || attempt >= 4) return res;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const ms = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 250 * (attempt + 1);
+    await new Promise(r => setTimeout(r, ms));
+  }
+}
 
 /** OpenAI-compatible chat completions behind the LA host. */
 export const AI_ENDPOINT = `${LA_ORIGIN}/litellm/v1/chat/completions`;

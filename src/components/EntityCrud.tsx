@@ -34,7 +34,9 @@
  * Built in (do NOT re-implement): optimistic update + Rückgängig counter-write
  * on edit, fetchAll-on-error, edit-from-overlay, and per-entity overlay bodies
  * (RecordHeader + <{Entity}Details> with every relation reachable and the
- * contextual "+" prefilled). Drag writes (onEventDrop/onCardMove) stay YOURS:
+ * contextual "+" prefilled; list-field back-references additionally get a
+ * "choose existing" picker that links an EXISTING record — built in, do not
+ * re-roll). Drag writes (onEventDrop/onCardMove) stay YOURS:
  * optimistic setter first, PATCH in background, undoToast with counter-write.
  *
  * Overlay content per entity (the host renders these — you never compose
@@ -66,6 +68,8 @@ import { BeitraegeZahlungenDetails } from '@/components/details/BeitraegeZahlung
 import { AI_PHOTO_SCAN, AI_PHOTO_LOCATION } from '@/config/ai-features';
 import { t, appLabel } from '@/i18n';
 import { undoToast } from '@/lib/polish';
+import { usePermissions } from '@/lib/permissions';
+import { toast } from 'sonner';
 import { formatDate } from '@/lib/formatters';
 
 // The overlay union — one branch per entity, `record` typed the way the data
@@ -94,6 +98,10 @@ export interface EntityCrudApi<TRecord, TDefaults> {
   openEdit: (record: TRecord) => void;
   /** Open the record overlay (raw record is fine — enrichment resolved inside). */
   openDetail: (record: TRecord) => void;
+  /** May the signed-in user create/change records of this list? (the
+   *  platform's rights — show a „+ Neu“ only when true; openCreate/openEdit
+   *  refuse with a notice otherwise). */
+  canWrite: boolean;
 }
 
 export interface EntityCrud {
@@ -113,6 +121,9 @@ export interface EntityCrud {
 
 export function useEntityCrud(data: EntityCrudData, options?: EntityCrudOptions): EntityCrud {
   const overlay = useRecordOverlayStack<OverlayItem>();
+  // the platform's rights of the signed-in user (lib/permissions.ts) — unknown = allowed
+  const perms = usePermissions();
+  const refuse = () => { toast.error(t('perm_denied_title'), { description: t('perm_denied_desc') }); };
   const [veranstaltungsteilnahmenDialog, setVeranstaltungsteilnahmenDialog] = useState<{ defaults?: VeranstaltungsteilnahmenDialogDefaults; editing?: Veranstaltungsteilnahmen } | null>(null);
   const [veranstaltungenDialog, setVeranstaltungenDialog] = useState<{ defaults?: VeranstaltungenDialogDefaults; editing?: Veranstaltungen } | null>(null);
   const [mitgliederDialog, setMitgliederDialog] = useState<{ defaults?: MitgliederDialogDefaults; editing?: Mitglieder } | null>(null);
@@ -301,7 +312,7 @@ export function useEntityCrud(data: EntityCrudData, options?: EntityCrudOptions)
                   record={top.record}
                   veranstaltungsteilnahmenList={data.veranstaltungsteilnahmen}
                   onOpenVeranstaltungsteilnahmen={(r) => detailVeranstaltungsteilnahmen(r, true)}
-                  onAddVeranstaltungsteilnahmen={() => setVeranstaltungsteilnahmenDialog({ defaults: { veranstaltung: createRecordUrl(APP_IDS.VERANSTALTUNGEN, top.record.record_id) } })}
+                  onAddVeranstaltungsteilnahmen={perms.canWrite('veranstaltungsteilnahmen') ? () => setVeranstaltungsteilnahmenDialog({ defaults: { veranstaltung: createRecordUrl(APP_IDS.VERANSTALTUNGEN, top.record.record_id) } }) : undefined}
                 />
               </>
             );
@@ -314,10 +325,10 @@ export function useEntityCrud(data: EntityCrudData, options?: EntityCrudOptions)
                   record={top.record}
                   veranstaltungsteilnahmenList={data.veranstaltungsteilnahmen}
                   onOpenVeranstaltungsteilnahmen={(r) => detailVeranstaltungsteilnahmen(r, true)}
-                  onAddVeranstaltungsteilnahmen={() => setVeranstaltungsteilnahmenDialog({ defaults: { mitglied: createRecordUrl(APP_IDS.MITGLIEDER, top.record.record_id) } })}
+                  onAddVeranstaltungsteilnahmen={perms.canWrite('veranstaltungsteilnahmen') ? () => setVeranstaltungsteilnahmenDialog({ defaults: { mitglied: createRecordUrl(APP_IDS.MITGLIEDER, top.record.record_id) } }) : undefined}
                   beitraegeZahlungenList={data.beitraegeZahlungen}
                   onOpenBeitraegeZahlungen={(r) => detailBeitraegeZahlungen(r, true)}
-                  onAddBeitraegeZahlungen={() => setBeitraegeZahlungenDialog({ defaults: { mitglied: createRecordUrl(APP_IDS.MITGLIEDER, top.record.record_id) } })}
+                  onAddBeitraegeZahlungen={perms.canWrite('beitraege_zahlungen') ? () => setBeitraegeZahlungenDialog({ defaults: { mitglied: createRecordUrl(APP_IDS.MITGLIEDER, top.record.record_id) } }) : undefined}
                 />
               </>
             );
@@ -336,6 +347,13 @@ export function useEntityCrud(data: EntityCrudData, options?: EntityCrudOptions)
           }
           return null;
         }}
+        canEdit={(top) => {
+          if (top.type === 'veranstaltungsteilnahmen') return perms.canWrite('veranstaltungsteilnahmen');
+          if (top.type === 'veranstaltungen') return perms.canWrite('veranstaltungen');
+          if (top.type === 'mitglieder') return perms.canWrite('mitglieder');
+          if (top.type === 'beitraegeZahlungen') return perms.canWrite('beitraege_zahlungen');
+          return true;
+        }}
         onEdit={(top) => {
           overlay.close();
           if (top.type === 'veranstaltungsteilnahmen') setVeranstaltungsteilnahmenDialog({ editing: top.record, defaults: top.record.fields });
@@ -351,24 +369,28 @@ export function useEntityCrud(data: EntityCrudData, options?: EntityCrudOptions)
     overlay,
     surfaces,
     veranstaltungsteilnahmen: {
-      openCreate: (defaults?: VeranstaltungsteilnahmenDialogDefaults) => setVeranstaltungsteilnahmenDialog({ defaults }),
-      openEdit: (record: Veranstaltungsteilnahmen) => setVeranstaltungsteilnahmenDialog({ editing: record, defaults: record.fields }),
+      openCreate: (defaults?: VeranstaltungsteilnahmenDialogDefaults) => (perms.canWrite('veranstaltungsteilnahmen') ? setVeranstaltungsteilnahmenDialog({ defaults }) : refuse()),
+      openEdit: (record: Veranstaltungsteilnahmen) => (perms.canWrite('veranstaltungsteilnahmen') ? setVeranstaltungsteilnahmenDialog({ editing: record, defaults: record.fields }) : refuse()),
       openDetail: (record: Veranstaltungsteilnahmen) => detailVeranstaltungsteilnahmen(record, false),
+      canWrite: perms.canWrite('veranstaltungsteilnahmen'),
     },
     veranstaltungen: {
-      openCreate: (defaults?: VeranstaltungenDialogDefaults) => setVeranstaltungenDialog({ defaults }),
-      openEdit: (record: Veranstaltungen) => setVeranstaltungenDialog({ editing: record, defaults: record.fields }),
+      openCreate: (defaults?: VeranstaltungenDialogDefaults) => (perms.canWrite('veranstaltungen') ? setVeranstaltungenDialog({ defaults }) : refuse()),
+      openEdit: (record: Veranstaltungen) => (perms.canWrite('veranstaltungen') ? setVeranstaltungenDialog({ editing: record, defaults: record.fields }) : refuse()),
       openDetail: (record: Veranstaltungen) => detailVeranstaltungen(record, false),
+      canWrite: perms.canWrite('veranstaltungen'),
     },
     mitglieder: {
-      openCreate: (defaults?: MitgliederDialogDefaults) => setMitgliederDialog({ defaults }),
-      openEdit: (record: Mitglieder) => setMitgliederDialog({ editing: record, defaults: record.fields }),
+      openCreate: (defaults?: MitgliederDialogDefaults) => (perms.canWrite('mitglieder') ? setMitgliederDialog({ defaults }) : refuse()),
+      openEdit: (record: Mitglieder) => (perms.canWrite('mitglieder') ? setMitgliederDialog({ editing: record, defaults: record.fields }) : refuse()),
       openDetail: (record: Mitglieder) => detailMitglieder(record, false),
+      canWrite: perms.canWrite('mitglieder'),
     },
     beitraegeZahlungen: {
-      openCreate: (defaults?: BeitraegeZahlungenDialogDefaults) => setBeitraegeZahlungenDialog({ defaults }),
-      openEdit: (record: BeitraegeZahlungen) => setBeitraegeZahlungenDialog({ editing: record, defaults: record.fields }),
+      openCreate: (defaults?: BeitraegeZahlungenDialogDefaults) => (perms.canWrite('beitraege_zahlungen') ? setBeitraegeZahlungenDialog({ defaults }) : refuse()),
+      openEdit: (record: BeitraegeZahlungen) => (perms.canWrite('beitraege_zahlungen') ? setBeitraegeZahlungenDialog({ editing: record, defaults: record.fields }) : refuse()),
       openDetail: (record: BeitraegeZahlungen) => detailBeitraegeZahlungen(record, false),
+      canWrite: perms.canWrite('beitraege_zahlungen'),
     },
     enriched: { veranstaltungsteilnahmen: enrichedVeranstaltungsteilnahmen, veranstaltungen: data.veranstaltungen, mitglieder: data.mitglieder, beitraegeZahlungen: enrichedBeitraegeZahlungen },
   };

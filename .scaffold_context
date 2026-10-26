@@ -14,7 +14,7 @@ index.css is pre-generated with the shared design system. Do NOT edit it.
 src/config/ai-features.ts is editable — set AI_PHOTO_SCAN['Entity'] = true to enable photo scan in dialogs.
 NEVER use Bash cat/echo/heredoc for file operations — always use Read/Write/Edit tools.
 
-Generated 122 scaffold files:
+Generated 152 scaffold files:
   - src/App.tsx
   - src/i18n/index.ts
   - src/i18n/common.ts
@@ -24,7 +24,6 @@ Generated 122 scaffold files:
   - src/types/la-widgets.d.ts
   - src/components/PageShell.tsx
   - src/components/ActionsSidebar.tsx
-  - src/pages/DashboardOverview.tsx
   - src/pages/DashboardReady.tsx
   - src/components/DashboardStates.tsx
   - src/components/ConfirmDialog.tsx
@@ -33,6 +32,7 @@ Generated 122 scaffold files:
   - src/components/WorkList.tsx
   - src/components/HeroBanner.tsx
   - src/components/SatelliteSection.tsx
+  - src/components/PickExistingDialog.tsx
   - scripts/check-dashboard.mjs
   - scripts/check-lookup-keys.mjs
   - scripts/check-hub.mjs
@@ -42,21 +42,22 @@ Generated 122 scaffold files:
   - scripts/check-public.mjs
   - scripts/check-hooks.mjs
   - scripts/check-intents.mjs
+  - scripts/check-plan.mjs
   - scripts/wire-intent.mjs
   - scripts/i18n-tx.mjs
   - scripts/heal-tsc.mjs
+  - scripts/heal-gates.mjs
+  - scripts/check-staging.mjs
+  - scripts/check-vsql.mjs
   - src/components/Combobox.tsx
   - src/components/DatePicker.tsx
   - .placeholder-tasks.json
   - src/config/form-enhancements/types.ts
-  - src/config/form-enhancements/Veranstaltungsteilnahmen.ts
-  - src/config/form-enhancements/Veranstaltungen.ts
-  - src/config/form-enhancements/Mitglieder.ts
-  - src/config/form-enhancements/BeitraegeZahlungen.ts
   - scripts/parse-formulas.mjs
   - scripts/apply-placeholders.mjs
   - src/config/intents.ts
   - src/components/IntentsNav.tsx
+  - src/components/NavRows.tsx
   - src/components/blocks/IntentWizardShell.tsx
   - src/components/IntentWizardShell.tsx
   - src/components/blocks/EntitySelectStep.tsx
@@ -72,6 +73,12 @@ Generated 122 scaffold files:
   - src/components/blocks/ChoiceGroup.tsx
   - src/components/blocks/FieldErrorSummary.tsx
   - src/components/blocks/Field.tsx
+  - src/components/blocks/Bound.tsx
+  - src/components/blocks/InlineCreate.tsx
+  - src/components/blocks/FileField.tsx
+  - src/lib/journey/policy.ts
+  - src/lib/journey/usePolicy.ts
+  - src/lib/journey/intentPolicy.ts
   - src/lib/journey/port.ts
   - src/lib/journey/format.ts
   - src/lib/journey/reference.ts
@@ -79,24 +86,34 @@ Generated 122 scaffold files:
   - src/lib/journey/occupancy.ts
   - src/lib/journey/selectMode.ts
   - src/lib/journey/search.ts
+  - src/lib/journey/fields.ts
+  - src/lib/journey/recordLabels.ts
+  - src/lib/journey/flowLinks.ts
+  - src/lib/journey/upload.ts
+  - src/lib/journey/useOccupancy.ts
+  - src/lib/journey/useRecordCount.ts
   - src/lib/journey/useRecordSearch.ts
   - src/lib/journey/useStepForm.ts
   - src/lib/journey/useJourneySubmit.ts
   - src/lib/journey/summary.ts
   - src/lib/journey/index.ts
   - src/lib/journey/publicPort.ts
+  - src/lib/journey/publicColumn.ts
   - src/lib/journey/rules.ts
+  - src/lib/journey/messages.ts
   - src/services/journeyPort.ts
   - src/config/journey.ts
+  - src/config/plan.ts
   - scripts/check-journey.mjs
+  - scripts/render-smoke.mjs
   - src/index.css
   - src/lib/origin.ts
+  - src/lib/permissions.ts
   - src/lib/sentry.ts
   - src/lib/stale-bundle.ts
   - src/lib/ai.ts
   - src/components/VersionCheck.tsx
   - src/components/AttachmentsSection.tsx
-  - src/config/ai-features.ts
   - src/lib/formatters.ts
   - src/lib/polish.ts
   - src/hooks/useDashboardData.ts
@@ -105,9 +122,21 @@ Generated 122 scaffold files:
   - src/pages/public/registry.tsx
   - src/pages/public/PublicPage.tsx
   - src/components/PublicShell.tsx
-  - src/components/PublicPagesNav.tsx
   - src/lib/publicPagesAdmin.ts
   - src/pages/PublicPagesAdmin.tsx
+  - src/pages/PublicPageFields.tsx
+  - src/components/FieldPolicyEditor.tsx
+  - src/lib/intentsAdmin.ts
+  - src/pages/IntentFields.tsx
+  - src/components/IntentPolicyLoader.tsx
+  - src/lib/pageJobs.ts
+  - src/components/PageJobDialog.tsx
+  - src/pages/IntentsAdmin.tsx
+  - src/lib/appMap.ts
+  - src/pages/AppMap.tsx
+  - src/components/PlanNotice.tsx
+  - src/hooks/usePageJobs.ts
+  - src/components/PageJobStatus.tsx
   - src/types/enriched.ts
   - src/lib/enrich.ts
   - src/components/AddressAutocomplete.tsx
@@ -137,6 +166,7 @@ Generated 122 scaffold files:
   - src/components/details/BeitraegeZahlungenDetails.tsx
   - src/components/EntityCrud.tsx
   - src/types/leaflet-plugins.d.ts
+  - .lane-context.md
 
 ## The enrich() output contract
 
@@ -269,7 +299,9 @@ contracts; Read one only if the contract below is insufficient.
  * Built in (do NOT re-implement): optimistic update + Rückgängig counter-write
  * on edit, fetchAll-on-error, edit-from-overlay, and per-entity overlay bodies
  * (RecordHeader + <{Entity}Details> with every relation reachable and the
- * contextual "+" prefilled). Drag writes (onEventDrop/onCardMove) stay YOURS:
+ * contextual "+" prefilled; list-field back-references additionally get a
+ * "choose existing" picker that links an EXISTING record — built in, do not
+ * re-roll). Drag writes (onEventDrop/onCardMove) stay YOURS:
  * optimistic setter first, PATCH in background, undoToast with counter-write.
  *
  * Overlay content per entity (the host renders these — you never compose
@@ -419,12 +451,16 @@ contracts; Read one only if the contract below is insufficient.
  * Mängel/Berichte/Fotos/…), the hub's overlay shows ONE of these per satellite
  * entity. The component bakes in the three mechanics that are easy to get wrong
  * by hand, so they're guaranteed by construction:
- *   1. it ALWAYS renders a "+" (the `onAdd` prop is required) — no read-only
- *      satellite sections;
+ *   1. it renders a "+" whenever the user may create (`onAdd` given — the
+ *      scaffold leaves it out for a list the user may not write);
  *   2. clicking a row calls `onOpen` (→ open the record's DETAIL overlay via
  *      overlay.push), NEVER the edit form — editing happens from inside that
  *      detail;
- *   3. consistent header-with-count + relation-list + dashed-add layout.
+ *   3. consistent header-with-count + relation-list + dashed-add layout;
+ *   4. optional `onPick` — a second dashed action "choose existing" for
+ *      satellites whose members already exist before they join (a consultant,
+ *      a customer). EntityCrud wires it for every list-field (multipleapplookup)
+ *      back-reference; hand-rendered sections may pass it too.
  *
  * Render one per entity in HUB_TOPOLOGY[hubKey]; the gate checks completeness.
  *

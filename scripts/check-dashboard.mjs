@@ -6,7 +6,8 @@
  * non-zero with actionable messages; fix every ERROR and re-run until green.
  * Text-based on purpose: cheap, deterministic, no AST dependency.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const FILE = 'src/pages/DashboardOverview.tsx';
 let src;
@@ -403,6 +404,79 @@ if (gridIdx >= 0) {
   }
 }
 
+// 25. A change an update flow owns is never written from this page. The flow
+// records who and when (a review, a decision); a dashboard button that sets
+// the state itself bypasses that control (live 20.10.2026: „Freigeben“ set a
+// proposal to approved without reviewer or date, next to the very flow the
+// owner's prompt asked for). The page opens the flow for the record:
+// flowActionFor(entity, field, id, value) from '@/config/plan'.
+{
+  const OWNED = {};
+  const callRe = /\b(update\w+Entry)\s*\(/g;
+  let m;
+  const hits = [];
+  while ((m = callRe.exec(code))) {
+    const own = OWNED[m[1]];
+    if (!own) continue;
+    let depth = 0, j = m.index + m[0].length - 1;
+    for (; j < code.length; j++) {
+      if (code[j] === '(') depth++;
+      else if (code[j] === ')' && --depth === 0) break;
+    }
+    const args = code.slice(m.index + m[0].length, j);
+    const keys = new Set();
+    for (const k of args.matchAll(/[{,]\s*(\w+)\s*(?::|(?=[,}]))/g)) keys.add(k[1]);
+    for (const field of Object.keys(own.fields)) {
+      if (!keys.has(field)) continue;
+      const line = code.slice(0, m.index).split('\n').length;
+      const flows = own.fields[field].map(o => `„${o.slug}“${o.value !== undefined ? ` (sets '${o.value}')` : ''}`).join(', ');
+      hits.push(`${own.entity}.${field} — owned by ${flows}\n    line ${line}: ${dashLines[line - 1]}`);
+    }
+  }
+  if (hits.length) {
+    errors.push(`This page writes a field an update flow owns — the flow records who and when, a direct write bypasses it. Replace the write with the flow: \`const go = flowActionFor('<entity>', '<field>', r.record_id, '<target key>')\` (import from '@/config/plan'; null while the flow is not live) and \`action: go ? { label, onClick: go } : undefined\`; a drag calls go?.() and returns a short notice:\n  ` + hits.join('\n  '));
+  }
+}
+
+// 26. The overview writes only what the plan lets it write itself
+// (plan.dashboard.writes — a drag that moves a stay, a button that flips a
+// flag). Audit 23.10.2026: the overview moved bookings and set „An Besitzer
+// gesendet“ with no plan and no line on „Deine Anwendung“. A plan from
+// before that date has no list (null): warn, never fail.
+{
+  const ALLOWED = null;
+  const callRe = /\b((?:update|create|delete)\w+Entry)\s*\(/g;
+  let m;
+  const bad = [];
+  while ((m = callRe.exec(code))) {
+    const name = m[1];
+    const line = code.slice(0, m.index).split('\n').length;
+    if (!name.startsWith('update')) {
+      bad.push(`${name} — the overview never creates or deletes records itself (open crud.<entity>.openCreate / the record overlay)\n    line ${line}: ${dashLines[line - 1]}`);
+      continue;
+    }
+    let depth = 0, j = m.index + m[0].length - 1;
+    for (; j < code.length; j++) {
+      if (code[j] === '(') depth++;
+      else if (code[j] === ')' && --depth === 0) break;
+    }
+    const args = code.slice(m.index + m[0].length, j);
+    const keys = [];
+    for (const k of args.matchAll(/[{,]\s*(\w+)\s*(?::|(?=[,}]))/g)) keys.push(k[1]);
+    const allowed = ALLOWED === null ? { entity: name, fields: [] } : (ALLOWED[name] || { entity: name, fields: [] });
+    const extra = keys.filter(k => !allowed.fields.includes(k));
+    if (extra.length) {
+      const only = ALLOWED === null ? 'no plan decided this yet' : `the plan lets this page write only: ${allowed.fields.length ? allowed.fields.join(', ') : 'nothing'}`;
+      bad.push(`${allowed.entity}: ${extra.join(', ')} — ${only}\n    line ${line}: ${dashLines[line - 1]}`);
+    }
+  }
+  if (bad.length) {
+    const msg = `This page writes fields the plan does not give it (plan.dashboard.writes). A direct write that the plan does not name is invisible on „Deine Anwendung“. Remove the write (use the record dialog: crud.<entity>.openEdit(record)) or ask the owner to change the plan:\n  ` + bad.join('\n  ');
+    if (ALLOWED === null) warnings.push(msg + '\n  (plan from before 23.10.2026 — warning only)');
+    else errors.push(msg);
+  }
+}
+
 // 21. Runtime i18n: the dashboard ships its UI languages with a live
 // switcher — hardcoded UI strings stay frozen in one language. Every string
 // the agent writes is tx-marked (`{tx('…')}` — the pipeline translates) or
@@ -515,6 +589,36 @@ if (gridIdx >= 0) {
     errors.push(
       'Module-scope LOOKUP_OPTIONS label read — the labels are locale-aware getters and freeze in whatever language is active at import. Move THIS derivation unchanged into the component body; a plain const or useMemo there is enough. Do NOT split it into a keys-only module const plus a second lookup in the body — a live run took that path, then had to delete the now-unused const again (three edits for a one-edit move).\n' + hoisted.join('\n')
     );
+  }
+}
+
+// ── The form-enhancement engine is generator-owned and must stay intact.
+// Live (22.09.2026): the form-polish sub-agent left `types.ts` as its bare
+// interfaces, all runtime helpers gone; every dialog then failed to compile
+// and the dashboard agent spent half its run hand-writing replacements into
+// a file it does not own. The dialogs' own import line is the contract —
+// whatever they name must be exported there.
+{
+  const TYPES = 'src/config/form-enhancements/types.ts';
+  const DIALOGS = 'src/components/dialogs';
+  if (existsSync(TYPES) && existsSync(DIALOGS)) {
+    const typesSrc = readFileSync(TYPES, 'utf8');
+    const wanted = new Set();
+    for (const f of readdirSync(DIALOGS).filter(n => n.endsWith('.tsx'))) {
+      const src = readFileSync(join(DIALOGS, f), 'utf8');
+      const re = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"]@\/config\/form-enhancements\/types['"]/g;
+      let m;
+      while ((m = re.exec(src))) {
+        for (const raw of m[1].split(',')) {
+          const name = raw.replace(/\btype\b/, '').split(' as ')[0].trim();
+          if (name) wanted.add(name);
+        }
+      }
+    }
+    const missing = [...wanted].filter(n => !new RegExp(`export\\s+(?:type\\s+|interface\\s+|const\\s+|function\\s+)?${n}\\b`).test(typesSrc));
+    if (missing.length) {
+      errors.push(`${TYPES} no longer exports ${missing.join(', ')} — the file is GENERATOR-owned; restore it (run Update) instead of re-implementing it in place. The dialogs import these by name.`);
+    }
   }
 }
 

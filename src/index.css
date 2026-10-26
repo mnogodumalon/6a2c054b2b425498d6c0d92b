@@ -232,13 +232,19 @@
  * unter unseren Dialogen bzw. bewusst über dem Header. */
 /* App-Frame-Grid — offizielles Host-Layout laut Widget-Team: der body
  * spannt die Areas top (Header), left (Drawer), center (Content) auf.
- * min-height lässt die 1fr-Zeile den Viewport füllen; der Seitenhintergrund
- * wandert vom früheren Layout-Wrapper hierher. #root und der Layout-Wrapper
- * sind display:contents, damit die Chrome-Elemente direkte Grid-Items sind. */
+ * Wie auf der Plattform selbst (Gateway-Seiten, 04.09.2026 gemessen) ist der
+ * body GENAU viewporthoch und scrollt nicht: die 1fr-Zeile ist damit definit,
+ * der Drawer so hoch wie der Bildschirm (sein Inneres scrollt, Footer bleibt
+ * unten) und der Inhalt scrollt in der center-Area selbst (Regel unten).
+ * Mit min-height wuchs der body mit dem Inhalt, der Drawer wurde so lang
+ * wie die Seite und scrollte mit ihr weg. Der Seitenhintergrund wandert vom
+ * früheren Layout-Wrapper hierher. #root und der Layout-Wrapper sind
+ * display:contents, damit die Chrome-Elemente direkte Grid-Items sind. */
 body {
   margin: 0;
   padding: 0;
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--background);
   display: grid;
   gap: 0;
@@ -255,6 +261,13 @@ body {
  * wirkungslos — die Regel trifft also nur echte Boxen. */
 #root > * {
   grid-area: center;
+  /* Die center-Area ist der Scroll-Container (Plattform: <main> mit
+   * overflow-y:auto; min-height:0). Gilt für den Layout-Content-Wrapper
+   * (Klasse in Layout.tsx) UND für die öffentlichen Seiten außerhalb des
+   * Layouts, die hier als echte Boxen landen. min-height:0 hebt die
+   * Grid-Item-Mindesthöhe auf, sonst wächst das Item statt zu scrollen. */
+  min-height: 0;
+  overflow-y: auto;
 }
 /* Sonners Toast-Wrapper (<section aria-live aria-label="Notifications…">)
  * ist ein #root-Direktkind und wird durch die Regel darüber zum Grid-Item:

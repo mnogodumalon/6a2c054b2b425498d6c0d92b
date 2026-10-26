@@ -5,10 +5,11 @@
  * only sees this type runs under `#/intents/<slug>` (authenticated,
  * `servicePort` from `@/services/journeyPort`) and under `#/public/<slug>`
  * (anonymous, `createPublicPort` from `@/lib/journey/publicPort`) unchanged.
- * `update` / `delete` do not exist here on purpose: an anonymous visitor must
- * never modify an existing record, and a step that needs to (undo, edit)
- * belongs to the internal wrapper page, not to the shared step. Writing
- * `port.update(...)` is a TypeScript error, not a gate finding.
+ * `update` / `delete` do not exist on JourneyPort on purpose: an anonymous
+ * visitor must never modify an existing record. The INTERNAL door adds
+ * `update` (`InternalJourneyPort`, implemented by `servicePort`); a plan step
+ * with `updates: id` uses it through the runner, and a door without it throws
+ * — so a shared step still cannot write `port.update(...)`: a TypeScript error.
  */
 import { FIELD_RULES, type EntityKey } from './rules';
 
@@ -32,6 +33,10 @@ export interface ListOptions {
   fields?: string[];
   /** Server-side text search over string fields (internal) / client-side over the loaded page (public). */
   search?: { query: string; fields: string[] };
+  /** A standing vSQL restriction, e.g. "r.v_status == 'verfuegbar'" — the step's
+   *  "only free rooms / only open assignments". Internal door only: a grant
+   *  cannot filter, the public door IGNORES it (use useRecordSearch's `where`). */
+  filter?: string;
   signal?: AbortSignal;
 }
 
@@ -39,13 +44,28 @@ export interface JourneyPort {
   readonly door: 'internal' | 'public';
   list(entity: EntityKey, opts?: ListOptions): Promise<JourneyRecord[]>;
   /** Record count (optionally filtered by the same search). null = this door cannot count (public grants). */
-  count(entity: EntityKey, opts?: { search?: { query: string; fields: string[] }; signal?: AbortSignal }): Promise<number | null>;
+  count(entity: EntityKey, opts?: { search?: { query: string; fields: string[] }; filter?: string; signal?: AbortSignal }): Promise<number | null>;
+  /** ONE record by id (a linked record behind `fieldRef`, a record from the URL), or null.
+   *  The record the user just picked needs no request: `x.recordOf(id)` on its useRecordSearch. */
+  get(entity: EntityKey, id: string): Promise<JourneyRecord | null>;
   /** Takes FORM values (record ids, lookup keys, ISO strings). The wire form
    *  (record URLs, sliced dates) is derived here — never assemble it by hand. */
   create(entity: EntityKey, values: Record<string, unknown>): Promise<JourneyRecord>;
   /** The applookup value for a record of app `appId`, in the form this door
    *  needs (REST URL internally, grant-scoped ref publicly). */
   ref(appId: string, recordId: string): string;
+}
+
+/** The internal door: change an existing record with the same payload rules
+ *  as `create` (plain ids in, the door shapes the references). Two live flows
+ *  bypassed the port for this — the generated service's update method plus a
+ *  hand-built record URL — and lost every rule the layer settles. */
+export interface InternalJourneyPort extends JourneyPort {
+  update(entity: EntityKey, id: string, values: Record<string, unknown>): Promise<JourneyRecord>;
+}
+
+export function canUpdate(port: JourneyPort): port is InternalJourneyPort {
+  return typeof (port as Partial<InternalJourneyPort>).update === 'function';
 }
 
 export class JourneyPortError extends Error {

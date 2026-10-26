@@ -43,6 +43,12 @@
 //      member — zero semantic change. Only when its value cannot have side
 //      effects (identifier, member chain, literal, shorthand); a call or
 //      `await` there stays for the agent.
+//   H. TS2305/TS2724 `import { lookupOption } from '@/lib/formatters'` — a
+//      scaffold export imported from the wrong module (live: the WRITE
+//      helper appended to the formatters import, two lines under the comment
+//      forbidding it — one repair edit). Fix: drop the name from that import
+//      and import it from its real home (EXPORT_HOME, generated). Only names
+//      the map knows; anything else stays for the agent.
 //
 // A/B only apply when the property PROVABLY exists at the target (parsed
 // from the generated src/types/app.ts + src/types/enriched.ts) — no
@@ -135,6 +141,39 @@ const CMP_RE = /^(.+?)\((\d+),(\d+)\): error TS2367: This comparison appears to 
 const JSX_RE = /^(.+?)\((\d+),(\d+)\): error TS2503: Cannot find namespace 'JSX'\.$/;
 const MIX_RE = /^(.+?)\((\d+),(\d+)\): error TS5076: '(?:\|\||&&|\?\?)' and '(?:\|\||&&|\?\?)' operations cannot be mixed without parentheses\.$/;
 const DUP_RE = /^(.+?)\((\d+),(\d+)\): error TS2783: '(.+?)' is specified more than once, so this usage will be overwritten\.$/;
+const HOME_RE = /^(.+?)\((\d+),(\d+)\): error TS(?:2305|2724): Module '"(.+?)"' has no exported member (?:named )?'(.+?)'\./;
+// TS2459: the wrong module IMPORTS the name itself ("declares 'APP_IDS' locally,
+// but it is not exported") — same class H, same groups (file, line, col, module, name).
+const HOME_LOCAL_RE = /^(.+?)\((\d+),(\d+)\): error TS2459: Module '"(.+?)"' declares '(.+?)' locally, but it is not exported\./;
+
+/** name → the '@/…' module that really exports it (generated from the scaffold). */
+const EXPORT_HOME = {
+  "lookupOption": "@/types/app",
+  "APP_IDS": "@/types/app",
+  "LOOKUP_OPTIONS": "@/types/app",
+  "formatDate": "@/lib/formatters",
+  "formatDateTime": "@/lib/formatters",
+  "formatCurrency": "@/lib/formatters",
+  "displayLookup": "@/lib/formatters",
+  "displayMultiLookup": "@/lib/formatters",
+  "lookupKey": "@/lib/formatters",
+  "lookupKeys": "@/lib/formatters",
+  "t": "@/i18n",
+  "tx": "@/i18n",
+  "tp": "@/i18n",
+  "appLabel": "@/i18n",
+  "fieldLabel": "@/i18n",
+  "lookupLabel": "@/i18n",
+  "localeTag": "@/i18n",
+  "dateFnsLocale": "@/i18n",
+  "useDashboardData": "@/hooks/useDashboardData",
+  "LivingAppsService": "@/services/livingAppsService",
+  "createRecordUrl": "@/services/livingAppsService",
+  "extractRecordId": "@/services/livingAppsService",
+  "cleanFieldsForApi": "@/services/livingAppsService",
+  "useEntityCrud": "@/components/EntityCrud",
+  "cn": "@/lib/utils"
+};
 
 /** Discriminant spellings compare equal once `_` and case are dropped. */
 function normKey(s) {
@@ -148,6 +187,7 @@ function parseErrors(output) {
   const jsxErrors = [];
   const mixErrors = [];
   const dupErrors = [];
+  const homeErrors = [];
   let total = 0;
   for (const line of output.split('\n')) {
     const trimmed = line.trim();
@@ -155,6 +195,14 @@ function parseErrors(output) {
     const j = trimmed.match(JSX_RE);
     if (j) {
       jsxErrors.push({ file: j[1], line: Number(j[2]), col: Number(j[3]) });
+      continue;
+    }
+    const h = trimmed.match(HOME_RE) || trimmed.match(HOME_LOCAL_RE);
+    if (h) {
+      const [, file, lineNo, col, module, name] = h;
+      if (EXPORT_HOME[name] && EXPORT_HOME[name] !== module) {
+        homeErrors.push({ file, line: Number(lineNo), col: Number(col), module, name });
+      }
       continue;
     }
     const d = trimmed.match(DUP_RE);
@@ -200,7 +248,7 @@ function parseErrors(output) {
       }
     }
   }
-  return { errors, nullErrors, cmpErrors, jsxErrors, mixErrors, dupErrors, total };
+  return { errors, nullErrors, cmpErrors, jsxErrors, mixErrors, dupErrors, homeErrors, total };
 }
 
 // ── Fixes ───────────────────────────────────────────────────────────
@@ -459,7 +507,56 @@ function dropUnusedImport(src, name, filePath) {
   return src;
 }
 
-function healFile(filePath, errors, nullErrors, cmpErrors, jsxErrors, mixErrors, dupErrors, shapes) {
+/** Class H helpers — string level, AST-located, like ensureEnrichedImport. */
+function dropNamedImportFrom(src, name, module, filePath) {
+  const sf = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true,
+    filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause?.namedBindings) continue;
+    if (!ts.isStringLiteral(stmt.moduleSpecifier) || stmt.moduleSpecifier.text !== module) continue;
+    const nb = stmt.importClause.namedBindings;
+    if (!ts.isNamedImports(nb)) continue;
+    const el = nb.elements.find((e) => e.name.text === name);
+    if (!el) continue;
+    if (nb.elements.length === 1 && !stmt.importClause.name) {
+      let end = stmt.getEnd();
+      while (end < src.length && (src[end] === '\n' || src[end] === '\r')) end += 1;
+      return { src: src.slice(0, stmt.getStart(sf)) + src.slice(end), done: true };
+    }
+    const idx = nb.elements.indexOf(el);
+    let start = el.getStart(sf);
+    let end = el.getEnd();
+    if (idx < nb.elements.length - 1) end = nb.elements[idx + 1].getStart(sf);
+    else start = nb.elements[idx - 1].getEnd();
+    return { src: src.slice(0, start) + src.slice(end), done: true };
+  }
+  return { src, done: false };
+}
+
+function ensureNamedImport(src, name, module, filePath) {
+  const sf = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true,
+    filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  let lastImportEnd = 0;
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    lastImportEnd = stmt.getEnd();
+    if (!ts.isStringLiteral(stmt.moduleSpecifier) || stmt.moduleSpecifier.text !== module) continue;
+    if (stmt.importClause?.isTypeOnly) continue;
+    const nb = stmt.importClause?.namedBindings;
+    if (!nb || !ts.isNamedImports(nb)) continue;
+    if (nb.elements.some((e) => e.name.text === name)) return src;
+    const last = nb.elements[nb.elements.length - 1];
+    if (!last) return src.slice(0, nb.getStart(sf) + 1) + ` ${name} ` + src.slice(nb.getStart(sf) + 1);
+    return src.slice(0, last.getEnd()) + `, ${name}` + src.slice(last.getEnd());
+  }
+  const line = `import { ${name} } from '${module}';\n`;
+  if (lastImportEnd === 0) return line + src;
+  let at = lastImportEnd;
+  while (at < src.length && src[at] !== '\n') at += 1;
+  return src.slice(0, at + 1) + line + src.slice(at + 1);
+}
+
+function healFile(filePath, errors, nullErrors, cmpErrors, jsxErrors, mixErrors, dupErrors, homeErrors, shapes) {
   const before = readFileSync(filePath, 'utf8');
   const sf = ts.createSourceFile(
     filePath, before, ts.ScriptTarget.Latest, true,
@@ -564,7 +661,15 @@ function healFile(filePath, errors, nullErrors, cmpErrors, jsxErrors, mixErrors,
     // Anything else: not our class — stays in the tsc output for the agent.
   }
 
-  if (!edits.length) return fixed;
+  // Class H: the name belongs to another module — move it there.
+  const moves = [];
+  for (const err of homeErrors) {
+    const home = EXPORT_HOME[err.name];
+    if (!home || home === err.module) continue;
+    moves.push(err);
+  }
+
+  if (!edits.length && !moves.length) return fixed;
 
   // Overlapping/duplicate edits (two errors retyping the same member) — dedupe.
   const seen = new Set();
@@ -579,6 +684,12 @@ function healFile(filePath, errors, nullErrors, cmpErrors, jsxErrors, mixErrors,
   for (const e of unique) out = out.slice(0, e.start) + e.text + out.slice(e.end);
   for (const name of needImports) out = ensureEnrichedImport(out, name);
   for (const name of retypedRaw) out = dropUnusedImport(out, name, filePath);
+  for (const err of moves) {
+    const dropped = dropNamedImportFrom(out, err.name, err.module, filePath);
+    if (!dropped.done) continue;
+    out = ensureNamedImport(dropped.src, err.name, EXPORT_HOME[err.name], filePath);
+    fixed.push({ file: filePath, line: err.line, kind: 'import-from-home', name: err.name, from: err.module, to: EXPORT_HOME[err.name] });
+  }
   if (needReact) out = ensureReactDefaultImport(out);
   verifyParses(out, filePath);
   writeFileSync(filePath, out);
@@ -611,7 +722,7 @@ const shapes = {
 
 const files = new Set(
   [...parsed.errors, ...parsed.nullErrors, ...parsed.cmpErrors,
-   ...parsed.jsxErrors, ...parsed.mixErrors, ...parsed.dupErrors].map((e) => e.file),
+   ...parsed.jsxErrors, ...parsed.mixErrors, ...parsed.dupErrors, ...parsed.homeErrors].map((e) => e.file),
 );
 const fixed = [];
 for (const file of files) {
@@ -625,6 +736,7 @@ for (const file of files) {
       parsed.jsxErrors.filter((e) => e.file === file),
       parsed.mixErrors.filter((e) => e.file === file),
       parsed.dupErrors.filter((e) => e.file === file),
+      parsed.homeErrors.filter((e) => e.file === file),
       shapes,
     ));
   } catch (e) {

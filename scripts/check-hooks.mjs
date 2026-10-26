@@ -38,7 +38,11 @@ const eslint = new ESLint({
   ],
 });
 
-const results = await eslint.lintFiles(['src']);
+// `node scripts/check-hooks.mjs .intents-staging/Page.tsx` lints ONE file —
+// check-staging runs it per lane; a conditional useEffect used to pass the lane
+// and fail the integration gate (live 07.09.2026, a public page). No argument: src/.
+const targets = process.argv.slice(2).filter(a => !a.startsWith('--'));
+const results = await eslint.lintFiles(targets.length ? targets : ['src']);
 const problems = results.flatMap(r =>
   r.messages
     .filter(m => m.ruleId === 'react-hooks/rules-of-hooks')

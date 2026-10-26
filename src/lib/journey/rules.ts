@@ -10,9 +10,31 @@
  * signal, not a gate.
  */
 import { appLabel, fieldLabel, lookupLabel } from '@/i18n';
+import { policyLabel } from './policy';
 import { LOOKUP_OPTIONS } from '@/types/app';
 
 export type EntityKey = 'veranstaltungsteilnahmen' | 'veranstaltungen' | 'mitglieder' | 'beitraege_zahlungen';
+
+/** The text fields of each entity — what a search may run over (generated;
+ *  `never` for an entity without text of its own, e.g. a link table). */
+export interface StringFields {
+  "veranstaltungsteilnahmen": "bemerkungen_teilnahme";
+  "veranstaltungen": "titel" | "beschreibung" | "veranstaltungsort" | "verantwortlicher" | "bemerkungen_veranstaltung";
+  "mitglieder": "email" | "telefon" | "strasse" | "hausnummer" | "plz" | "ort" | "mitgliedsnummer" | "iban" | "bemerkungen" | "vorname" | "nachname";
+  "beitraege_zahlungen": "bemerkungen_zahlung";
+}
+export type StringFieldKey<E extends EntityKey> = E extends keyof StringFields ? StringFields[E] : never;
+
+/** The applookup fields of each entity (generated). A pick stored through
+ *  `form.set` on one of these must carry its display name — at compile time
+ *  (`StepForm.set`), because the review would otherwise show the id. */
+export interface RecordFields {
+  "veranstaltungsteilnahmen": "mitglied" | "veranstaltung";
+  "veranstaltungen": never;
+  "mitglieder": never;
+  "beitraege_zahlungen": "mitglied";
+}
+export type RecordFieldKey<E extends EntityKey> = E extends keyof RecordFields ? RecordFields[E] : never;
 
 export type FieldKind =
   | 'text'
@@ -39,7 +61,8 @@ export interface FieldRule {
   required: boolean;
   /** Build-time label — `labelOf()` prefers the runtime i18n bundle. */
   label: string;
-  /** Whether a journey may write it (`file` is upload-only, never via a journey). */
+  /** Whether a journey may write it as a value. `file` is false: a file is UPLOADED
+   *  (`form.file(key)` → FileField; the chosen file travels in the create as a data URL). */
   writable: boolean;
   maxLength?: number;
   /** lookup / multilookup: the ONLY valid write values. */
@@ -327,10 +350,10 @@ export const FIELD_RULES: Record<EntityKey, Record<string, FieldRule>> = {
       "label": "Mitgliedsstatus",
       "writable": true,
       "options": [
+        "aktiv",
         "passiv",
         "ehrenmitglied",
-        "ausgetreten",
-        "aktiv"
+        "ausgetreten"
       ]
     },
     "iban": {
@@ -491,12 +514,62 @@ export const SHAPES: Record<EntityKey, Shape[]> = {
   ]
 };
 
+/** The fields a record of this entity is recognised by (a person: first and
+ *  last name; else its title-like text field) — the same choice the dashboard's
+ *  enrichment makes for `<key>Name`. `useRecordSearch` resolves an applookup to
+ *  this name (`ctx.ref('gast')` in `toItem`). */
+export const DISPLAY_FIELDS: Record<EntityKey, string[]> = {
+  "veranstaltungsteilnahmen": [
+    "bemerkungen_teilnahme"
+  ],
+  "veranstaltungen": [
+    "titel"
+  ],
+  "mitglieder": [
+    "vorname",
+    "nachname"
+  ],
+  "beitraege_zahlungen": [
+    "bemerkungen_zahlung"
+  ]
+};
+
+/** The display name of a record: its display fields joined, else the first
+ *  non-empty text value, else ''. */
+/** A display-field value as text: strings as they are, a lookup `{ key, label }`
+ *  (either door hydrates lookups to objects) by its label — an entity whose
+ *  only title-like field is a lookup/select otherwise had no name at all. */
+function displayPart(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  if (v && typeof v === 'object' && 'label' in v) {
+    const l = (v as { label?: unknown }).label;
+    return l === null || l === undefined ? '' : String(l).trim();
+  }
+  return '';
+}
+
+export function displayNameOf(entity: EntityKey, fields: Record<string, unknown>): string {
+  const parts = (DISPLAY_FIELDS[entity] ?? [])
+    .map(k => displayPart(fields[k]))
+    .filter(v => v !== '');
+  if (parts.length > 0) return parts.join(' ');
+  for (const [k, rule] of Object.entries(FIELD_RULES[entity] ?? {})) {
+    if (rule.kind !== 'text' && rule.kind !== 'email') continue;
+    const v = fields[k];
+    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+  }
+  return '';
+}
+
 export function ruleOf(entity: EntityKey, key: string): FieldRule | undefined {
   return FIELD_RULES[entity]?.[key];
 }
 
-/** The field label as the user sees it — runtime bundle first, generated label second. */
+/** The field label as the user sees it — the owner's policy label first (a
+ *  public page's "Felder anpassen"), runtime bundle second, generated label last. */
 export function labelOf(entity: EntityKey, key: string): string {
+  const own = policyLabel(entity, key);
+  if (own) return own;
   const fromBundle = fieldLabel(entity, key);
   if (fromBundle !== key) return fromBundle;
   return ruleOf(entity, key)?.label ?? key;

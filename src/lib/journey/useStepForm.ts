@@ -9,22 +9,38 @@
  *   <DatePicker {...f.date('anreise')} />                single date
  *   <ChoiceGroup {...f.choice('status')} />              lookup (≤ 6 options)
  *   <Combobox {...f.record('kunde')} items={…} />        applookup
+ *   <EntitySelectStep {...x.select} {...f.records('mitarbeiter', x.labelOf)} />   multipleapplookup (toggle pick)
  *   <AvailabilityRangePicker {...f.range('anreise', 'abreise', { blocked })} />
  *   <StepNav onNext={() => f.validate(['name', 'email'])} />
  *
  * Timing follows "reward early, punish late": nothing is said in an untouched
  * field, an error appears on blur, disappears the moment the value is fixed,
- * and `f.ok(key)` turns true only after the user touched the field. Messages
- * name the real field label ("„Anreisedatum" ist ein Pflichtfeld").
+ * and `f.ok(key)` turns true only after the user touched the field. An empty
+ * required field shows the agent's sentence for it (`src/lib/journey/messages.ts`,
+ * „Bitte einen Gast auswählen."), else the label sentence
+ * („„Anreisedatum" ist ein Pflichtfeld"); `messages` overrides per flow.
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { t, tp } from '@/i18n';
 import { rangeIsFree } from '@/components/blocks/AvailabilityRangePicker';
-import { formatFieldValue, formatRange } from './format';
-import { FIELD_RULES, isEmptyValue, labelOf, optionsOf, type EntityKey, type FieldRule } from './rules';
+import { formatFieldValue, formatRange, type RangeUnit } from './format';
+import { isUploadValue } from './upload';
+import { FIELD_RULES, isEmptyValue, labelOf, optionsOf, type EntityKey, type FieldRule, type RecordFieldKey } from './rules';
+import { requiredMessage } from './messages';
 import { occupancyRuleOf } from './occupancy';
+import { isHiddenByPolicy, policyRequired } from './policy';
+import { usePolicyVersion } from './usePolicy';
 
 export type FormValues = Record<string, unknown>;
+
+// The wizard step the user is on — set by IntentWizardShell, read by `set()`:
+// a form without a `steps` map learns which step a field belongs to from the
+// step it was filled on. That drives "Ändern" in the review (live: a ticket
+// flow with two forms and no steps map offered no Ändern at all).
+let activeWizardStep: number | undefined;
+export function setActiveWizardStep(step: number | undefined): void {
+  activeWizardStep = step;
+}
 
 export interface SummaryItem {
   key: string;
@@ -32,10 +48,19 @@ export interface SummaryItem {
   value: string;
   /** Wizard step that edits this value — enables "Change" in the summary. */
   step?: number;
-  /** All field keys behind this row (a range row has two). */
-  keys: string[];
-  /** The element to focus when the user wants to change it. */
-  fieldId: string;
+  /** All field keys behind this row (a range row has two). OPTIONAL like
+   *  `fieldId`: a computed row covers no field (live: a lane lost a gate
+   *  round and then wrote `keys: []`). */
+  keys?: string[];
+  /** The element to focus when the user wants to change it. OPTIONAL: a row
+   *  the page computes (a total, a status the plan sets, today's date) has no
+   *  input behind it — leave it out, "Ändern" then jumps to the step alone.
+   *  Live: a required fieldId made a flow invent `fieldId: 'status'` for a
+   *  row no field owned. */
+  fieldId?: string;
+  /** A row nobody answers here — a value the flow sets itself. "Ändern"
+   *  then leads to the page that changes it („Nach dem Bau“), not to a step. */
+  href?: string;
 }
 
 export interface FormError {
@@ -52,17 +77,44 @@ export interface StepFormOptions {
   steps?: Record<string, number>;
   /** Override the platform's `required` per field (public pages declare their own). */
   required?: Record<string, boolean>;
+  /** What to say when a required field is empty, per field — when THIS flow
+   *  knows more than the entity („Bitte den Einsatzleiter auswählen.").
+   *  Default: the entity's sentence from messages.ts. */
+  messages?: Record<string, string>;
   initial?: FormValues;
   /** Prefix for element ids (default: the entity key). */
   id?: string;
+  /** Browser autofill of the person's OWN data (given-name, email, postal-code, …
+   *  from the generated rules). ON for the public door — a visitor types their own
+   *  details, autofill is the cheapest conversion lever there is. OFF (default)
+   *  inside the dashboard: the team enters someone ELSE's data, and the browser
+   *  would offer the team member's own name and address. `type`/`inputMode`
+   *  (the right keyboard) are set either way. */
+  autoComplete?: boolean;
 }
 
 export interface RangeOptions {
   blocked?: Array<{ start: string; end?: string | null }>;
   minNights?: number;
+  /** How the pair counts in messages and the summary: 'nights' (a stay),
+   *  'days' (a course, a loan, a period) or 'none'. Default: 'nights' when the
+   *  entity has an occupancy rule (it IS a stay), else 'days'. */
+  unit?: RangeUnit;
 }
 
 type ChangeLike = unknown | { target: { value: unknown; type?: string; checked?: boolean } };
+
+/** Binding for a file field — spread onto <FileField>: the value is a pending
+ *  upload (data URL), a stored file URL, or null. */
+export interface FileProps {
+  id: string;
+  name: string;
+  value: string | null;
+  onChange: (value: string | null) => void;
+  required: boolean;
+  invalid: boolean;
+  describedBy?: string;
+}
 
 export interface FieldProps {
   id: string;
@@ -115,6 +167,15 @@ export interface RecordProps {
   invalid: boolean;
 }
 
+/** A multi-record pick (multipleapplookup): spread onto <EntitySelectStep>. */
+export interface RecordsProps {
+  id: string;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  invalid: boolean;
+  'aria-describedby'?: string;
+}
+
 export interface RangeProps {
   value: { from: string | null; to: string | null };
   onChange: (range: { from: string | null; to: string | null }) => void;
@@ -122,16 +183,26 @@ export interface RangeProps {
   minNights: number;
 }
 
-export interface StepForm {
-  readonly entity: EntityKey;
+/** `set`'s arguments by field: an applookup field takes the record's display
+ *  name as a REQUIRED third argument (`x.labelOf(id)` — may be undefined, but
+ *  it has to be passed); every other field takes it optionally. A pick stored
+ *  without its name no longer compiles — live it showed as a 24-hex id. */
+export type SetArgs<E extends EntityKey, K extends string> = K extends RecordFieldKey<E>
+  ? [value: unknown, label: string | undefined]
+  : [value: unknown, label?: string];
+
+export interface StepForm<E extends EntityKey = EntityKey> {
+  readonly entity: E;
   readonly id: string;
   readonly keys: string[];
+  /** Keys of `fields` the owner's policy hides — the shell skips a step that has only these. */
+  readonly hiddenKeys: string[];
   readonly rules: Record<string, FieldRule>;
   readonly values: FormValues;
   /** Display names learned while picking records, keyed by field key and by record id. */
   readonly labels: Record<string, string>;
   get(key: string): unknown;
-  set(key: string, value: unknown, label?: string): void;
+  set<K extends string>(key: K, ...rest: SetArgs<E, K>): void;
   /** Teach the form a record's display name (for summaries of multi-record fields). */
   remember(recordId: string, label: string): void;
   reset(values?: FormValues, labels?: Record<string, string>): void;
@@ -141,6 +212,12 @@ export interface StepForm {
   choice(key: string): ChoiceProps;
   checkbox(key: string): CheckboxProps;
   record(key: string): RecordProps;
+  /** Binding for a file field (`<FileField {...form.file('beleg')} />`); the chosen file travels in the create as a data URL. */
+  file(key: string): FileProps;
+  /** Binding for a multipleapplookup: the value is a `string[]` of record ids,
+   *  required means "at least one". `labelOf` (the pick's `useRecordSearch`)
+   *  teaches the form the display names the summary shows. */
+  records(key: string, labelOf?: (id: string) => string | undefined): RecordsProps;
   range(fromKey: string, toKey: string, opts?: RangeOptions): RangeProps;
   /** The visible error of a field (after touch or a validate() attempt). */
   error(key: string): string | undefined;
@@ -225,20 +302,38 @@ function focusById(id: string): void {
   }
 }
 
-export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): StepForm {
+export function useStepForm<E extends EntityKey>(entity: E, options: StepFormOptions = {}): StepForm<E> {
   const rules = useMemo(
     () => (FIELD_RULES as Record<string, Record<string, FieldRule>>)[entity] ?? {},
     [entity],
   );
   const fieldsKey = options.fields?.join('|') ?? '';
-  const keys = useMemo(
+  // The owner's field policy (public pages, "Felder anpassen"): a hidden key
+  // is not a key of this form — not validated, not summarised, not sent. The
+  // policy arrives with the page config, after the first render.
+  const policyVersion = usePolicyVersion();
+  const allKeys = useMemo(
     () => options.fields ?? Object.keys(rules).filter(k => rules[k].writable),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rules, fieldsKey],
   );
+  const keys = useMemo(
+    () => allKeys.filter(k => !isHiddenByPolicy(entity, k)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allKeys, entity, policyVersion],
+  );
+  const hiddenKeys = useMemo(
+    () => allKeys.filter(k => isHiddenByPolicy(entity, k)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allKeys, entity, policyVersion],
+  );
   const formId = options.id ?? entity;
   const stepsMap = options.steps ?? {};
+  // Steps learned from `set()` while a wizard step was active; the map wins.
+  const learnedSteps = useRef<Record<string, number>>({});
+  const stepFor = (key: string): number | undefined => stepsMap[key] ?? learnedSteps.current[key];
   const requiredOverride = options.required ?? {};
+  const messagesOverride = options.messages ?? {};
   const boundKeys = new Set<string>([...(options.fields ?? []), ...Object.keys(stepsMap)]);
   const bound = (key: string): boolean => boundKeys.size === 0 || boundKeys.has(key);
   // The stay's resource (the agent's occupancy rule in src/config/journey.ts)
@@ -259,11 +354,13 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
   const errorId = useCallback((key: string) => `${formId}-${key}-error`, [formId]);
   const isRequired = useCallback(
     (key: string) =>
-      requiredOverride[key] ?? (key === occupancyResource && keys.includes(key) ? true : rules[key]?.required ?? false),
-    [requiredOverride, rules, occupancyResource, keys],
+      policyRequired(entity, key) ?? requiredOverride[key] ?? (key === occupancyResource && keys.includes(key) ? true : rules[key]?.required ?? false),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [requiredOverride, rules, occupancyResource, keys, entity, policyVersion],
   );
 
   const rangeEndingAt = (key: string) => Object.values(rangesRef.current).find(r => r.to === key);
+  const rangeUnitOf = (opts: RangeOptions): RangeUnit => opts.unit ?? (occupancyResource ? 'nights' : 'days');
 
   const messageFor = useCallback(
     (key: string, vals: FormValues): string | undefined => {
@@ -272,10 +369,11 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
       const v = vals[key];
       const asTo = rangeEndingAt(key);
       if (isEmptyValue(v)) {
-        if (isRequired(key)) return t('v_required', { label });
+        const missing = () => messagesOverride[key] ?? requiredMessage(entity, key);
+        if (isRequired(key)) return missing();
         // A stay with an arrival but no departure is incomplete even when the
         // platform marks neither field required.
-        if (asTo && !isEmptyValue(vals[asTo.from])) return t('v_required', { label });
+        if (asTo && !isEmptyValue(vals[asTo.from])) return missing();
         return undefined;
       }
       switch (rule?.kind) {
@@ -313,7 +411,7 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
           if (b <= a) return t('v_range_order', { from: labelOf(entity, asTo.from), to: label });
           const nights = Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
           const min = asTo.opts.minNights ?? 1;
-          if (nights < min) return tp('v_min_nights', min, { n: min });
+          if (nights < min) return rangeUnitOf(asTo.opts) === 'nights' ? tp('v_min_nights', min, { n: min }) : tp('v_min_days', min + 1, { n: min + 1 });
           if (asTo.opts.blocked && asTo.opts.blocked.length && !rangeIsFree(a, b, asTo.opts.blocked)) {
             return t('v_range_blocked');
           }
@@ -321,15 +419,20 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
       }
       return undefined;
     },
-    [entity, isRequired, rules],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entity, isRequired, rules, JSON.stringify(messagesOverride)],
   );
 
   const set = useCallback((key: string, value: unknown, label?: string) => {
     setValues(prev => (prev[key] === value ? prev : { ...prev, [key]: value }));
+    if (activeWizardStep !== undefined && learnedSteps.current[key] === undefined) learnedSteps.current[key] = activeWizardStep;
     if (label !== undefined) {
       setLabels(prev => {
         const next = { ...prev, [key]: label };
         if (typeof value === 'string') next[value] = label;
+        // A multirecord field picked as ONE record (`set('terminwuensche', [id], label)`):
+        // the summary looks the label up by id (live: the chip showed the raw id).
+        if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string') next[value[0]] = label;
         return next;
       });
     }
@@ -357,6 +460,20 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
     }
   };
 
+  const file = (key: string): FileProps => {
+    const raw = values[key];
+    const err = visibleError(key);
+    return {
+      id: fieldId(key),
+      name: key,
+      value: typeof raw === 'string' && raw ? raw : null,
+      onChange: next => { set(key, next ?? null); touch(key); },
+      required: isRequired(key),
+      invalid: Boolean(err),
+      describedBy: err ? errorId(key) : undefined,
+    };
+  };
+
   const field = (key: string): FieldProps => {
     const rule = rules[key];
     const raw = values[key];
@@ -373,7 +490,7 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
     if (type) props.type = type;
     const mode = inputModeFor(rule);
     if (mode) props.inputMode = mode;
-    if (rule?.autoComplete) props.autoComplete = rule.autoComplete;
+    if (options.autoComplete && rule?.autoComplete) props.autoComplete = rule.autoComplete;
     if (rule?.maxLength) props.maxLength = rule.maxLength;
     if (rule?.kind === 'number') props.step = 'any';
     if (props.required) props['aria-required'] = true;
@@ -436,6 +553,24 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
     },
     invalid: Boolean(visibleError(key)),
   });
+
+  const records = (key: string, labelOf?: (id: string) => string | undefined): RecordsProps => {
+    const raw = values[key];
+    const selectedIds = Array.isArray(raw) ? raw.map(String) : raw === undefined || raw === null || raw === '' ? [] : [String(raw)];
+    return {
+      id: fieldId(key),
+      selectedIds,
+      onToggle: id => {
+        const next = selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id];
+        set(key, next);
+        const label = labelOf?.(id);
+        if (label) remember(id, label);
+        touch(key);
+      },
+      invalid: Boolean(visibleError(key)),
+      'aria-describedby': describedBy(key),
+    };
+  };
 
   const range = (fromKey: string, toKey: string, opts: RangeOptions = {}): RangeProps => {
     rangesRef.current[`${fromKey}|${toKey}`] = { from: fromKey, to: toKey, opts };
@@ -500,8 +635,8 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
           key: `${asFrom.from}+${asFrom.to}`,
           keys: [asFrom.from, asFrom.to],
           label: `${labelOf(entity, asFrom.from)} / ${labelOf(entity, asFrom.to)}`,
-          value: formatRange(from as string | null, to as string | null),
-          step: stepsMap[asFrom.from] ?? stepsMap[asFrom.to],
+          value: formatRange(from as string | null, to as string | null, rangeUnitOf(rangesRef.current[`${asFrom.from}|${asFrom.to}`]?.opts ?? {})),
+          step: stepFor(asFrom.from) ?? stepFor(asFrom.to),
           fieldId: fieldId(asFrom.from),
         });
         continue;
@@ -514,7 +649,7 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
         keys: [key],
         label: labelOf(entity, key),
         value: formatFieldValue(entity, key, values[key], labels),
-        step: stepsMap[key],
+        step: stepFor(key),
         fieldId: fieldId(key),
       });
     }
@@ -524,7 +659,9 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
   const payload = (): FormValues => {
     const out: FormValues = {};
     for (const key of keys) {
-      if (rules[key] && !rules[key].writable) continue;
+      // a file is not writable as a value — but a file the person CHOSE here
+      // travels as a data URL and the platform stores it (lib/journey/upload)
+      if (rules[key] && !rules[key].writable && !(rules[key].kind === 'file' && isUploadValue(values[key]))) continue;
       if (isEmptyValue(values[key])) continue;
       out[key] = values[key];
     }
@@ -540,21 +677,24 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
 
   return {
     entity,
+    // The implementation takes (key, value, label?) — the interface narrows it per field.
     id: formId,
     keys,
     rules,
     values,
     labels,
     get: key => values[key],
-    set,
+    set: set as unknown as StepForm<E>['set'],
     remember,
     reset,
     field,
+    file,
     number,
     date,
     choice,
     checkbox,
     record,
+    records,
     range,
     error: visibleError,
     ok: key => Boolean(touched[key]) && !isEmptyValue(values[key]) && !messageFor(key, values),
@@ -562,10 +702,11 @@ export function useStepForm(entity: EntityKey, options: StepFormOptions = {}): S
     missing,
     required: isRequired,
     validate,
-    stepOf: key => stepsMap[key],
+    stepOf: stepFor,
     bound,
     fieldId,
     summary,
     payload,
+    hiddenKeys,
   };
 }

@@ -27,6 +27,7 @@ import type { ComputedContext } from '@/config/form-enhancements/types';
 import { applyFieldOrder, flattenFieldOrder, applyDefaults, evalComputed, numberInputProps, clampNumberValue, classifyComputed, extractApplookupRefs, mergeApplookupRefs, resolveApplookupRef } from '@/config/form-enhancements/types';
 import { formEnhancements, computedDeps, computedApplookupRefs } from '@/config/form-enhancements/Veranstaltungen';
 import { AttachmentsSection } from '@/components/AttachmentsSection';
+import { requiredMessage } from '@/lib/journey/messages';
 import { t, appLabel, fieldLabel, lookupLabel, localeTag, CURRENCY } from '@/i18n';
 import { Textarea } from '@/components/ui/textarea';
 import { DatePicker } from '@/components/DatePicker';
@@ -88,6 +89,8 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
       return true;
     }
   }, [fields, normalizedDefaults]);
+  // Fields the plan assigns to a tool (empty without a plan).
+  const SYSTEM_ASSIGNED: string[] = [];
   const [showErrors, setShowErrors] = useState(false);
   const REQUIRED_FIELDS = ['titel', 'datum_uhrzeit', 'veranstaltungsart'] as const;
   const missingRequired = REQUIRED_FIELDS.filter(k => {
@@ -309,13 +312,13 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="titel">{fieldLabel('veranstaltungen', 'titel')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="titel"
-          placeholder="z. B. Workshop KI Basics"
+          placeholder=""
           value={fields.titel ?? ''}
           onChange={e => setFields(f => ({ ...f, titel: e.target.value }))}
           required
         />
         {showErrors && !fields.titel && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('veranstaltungen', 'titel')}</p>
         )}
       </div>
     ),
@@ -324,7 +327,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="beschreibung">{fieldLabel('veranstaltungen', 'beschreibung')}</Label>
         <Textarea
           id="beschreibung"
-          placeholder="Inhalte, Agenda, Themen..."
+          placeholder=""
           value={fields.beschreibung ?? ''}
           onChange={e => setFields(f => ({ ...f, beschreibung: e.target.value }))}
           rows={3}
@@ -336,14 +339,14 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="datum_uhrzeit">{fieldLabel('veranstaltungen', 'datum_uhrzeit')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <DatePicker
           id="datum_uhrzeit"
-          placeholder="Wann findet die Veranstaltung statt?"
+          placeholder=""
           mode="datetime"
           value={fields.datum_uhrzeit ?? null}
           onChange={v => setFields(f => ({ ...f, datum_uhrzeit: v ?? undefined }))}
           required
         />
         {showErrors && !fields.datum_uhrzeit && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('veranstaltungen', 'datum_uhrzeit')}</p>
         )}
       </div>
     ),
@@ -352,7 +355,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="anmeldeschluss">{fieldLabel('veranstaltungen', 'anmeldeschluss')}</Label>
         <DatePicker
           id="anmeldeschluss"
-          placeholder="Letzter Anmeldetermin"
+          placeholder=""
           mode="date"
           value={fields.anmeldeschluss ?? null}
           onChange={v => setFields(f => ({ ...f, anmeldeschluss: v ?? undefined }))}
@@ -430,7 +433,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
           </button>
         </div>
         {showErrors && !fields.veranstaltungsart && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('veranstaltungen', 'veranstaltungsart')}</p>
         )}
       </div>
     ),
@@ -439,7 +442,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="veranstaltungsort">{fieldLabel('veranstaltungen', 'veranstaltungsort')}</Label>
         <Input
           id="veranstaltungsort"
-          placeholder="z. B. Universität Bayreuth"
+          placeholder=""
           value={fields.veranstaltungsort ?? ''}
           onChange={e => setFields(f => ({ ...f, veranstaltungsort: e.target.value }))}
         />
@@ -451,9 +454,10 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Input
           id="max_teilnehmer"
           type="number"
+          inputMode="decimal"
           step="any"
           {...numberInputProps(formEnhancements, 'max_teilnehmer')}
-          placeholder="z. B. 50"
+          placeholder=""
           value={fields.max_teilnehmer !== undefined ? fields.max_teilnehmer : (computedValues['max_teilnehmer'] ?? '')}
           onChange={e => setFields(f => ({ ...f, max_teilnehmer: clampNumberValue(formEnhancements, 'max_teilnehmer', e.target.value) }))}
         />
@@ -464,7 +468,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="verantwortlicher">{fieldLabel('veranstaltungen', 'verantwortlicher')}</Label>
         <Input
           id="verantwortlicher"
-          placeholder="Name der verantwortlichen Person"
+          placeholder=""
           value={fields.verantwortlicher ?? ''}
           onChange={e => setFields(f => ({ ...f, verantwortlicher: e.target.value }))}
         />
@@ -475,7 +479,7 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
         <Label htmlFor="bemerkungen_veranstaltung">{fieldLabel('veranstaltungen', 'bemerkungen_veranstaltung')}</Label>
         <Textarea
           id="bemerkungen_veranstaltung"
-          placeholder="Weitere Infos, Besonderheiten..."
+          placeholder=""
           value={fields.bemerkungen_veranstaltung ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_veranstaltung: e.target.value }))}
           rows={3}
@@ -756,9 +760,25 @@ export function VeranstaltungenDialog({ open, onClose, onSubmit, defaultValues, 
               const renderField = (k: string) => {
                 const inlineHints = computedLayout.anchors[k] ?? [];
                 const refs = applookupRefs[k] ?? [];
+                // A field the plan gives to a TOOL. On CREATE it is not shown
+                // at all — the value does not exist yet and typing one only
+                // gets overwritten. On EDIT it stays a normal input with a
+                // note: when a tool could not compose its value (a missing
+                // ingredient), this is the only place to repair the record.
+                if (SYSTEM_ASSIGNED.includes(k) && !recordId) {
+                  return (
+                    <div key={k} className="space-y-1.5 min-w-0">
+                      <Label>{fieldLabel('veranstaltungen', k)}</Label>
+                      <p className="text-sm text-muted-foreground">{t('assigned_by_system')}</p>
+                    </div>
+                  );
+                }
                 return (
                   <div key={k} className="space-y-1.5 min-w-0">
                     {fieldBlocks[k]}
+                    {SYSTEM_ASSIGNED.includes(k) && (
+                      <p className="text-xs text-muted-foreground">{t('assigned_by_system')}</p>
+                    )}
                     {refs.map(({ lookupKey }) => {
                       // Show the live numeric value the formula will pull from
                       // the selected lookup target (e.g. "Monatspreis: 34,90 €"

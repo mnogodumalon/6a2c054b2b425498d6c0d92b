@@ -4,7 +4,12 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { getStatusColor } from '@/components/blocks/StatusBadge';
 import { resolveSelectMode, type SelectMode, COMPACT_MAX, SEARCH_MIN_CHARS, SEARCH_DEBOUNCE_MS } from '@/lib/journey/selectMode';
-import { t } from '@/i18n';
+import { InlineCreate, canInlineCreate, inlineCreateFields } from '@/components/blocks/InlineCreate';
+import { entityLabel, type EntityKey } from '@/lib/journey/rules';
+import type { JourneyPort, JourneyRecord } from '@/lib/journey/port';
+import type { FormValues } from '@/lib/journey/useStepForm';
+import { t, tp } from '@/i18n';
+import { useWizard } from '@/components/blocks/IntentWizardShell';
 
 /**
  * EntitySelectStep — "pick a record" as people expect it from a customer
@@ -23,6 +28,28 @@ import { t } from '@/i18n';
  * Cards are only as good as their facts: pass `subtitle` and `stats` from the
  * fields users recognise a record by (the `^` fields of the entity summary),
  * not from bookkeeping columns.
+ *
+ * Two pick shapes, told apart by the props:
+ *   single  — `onSelect(id)` + `selectedId`: the usual "which guest" step.
+ *             Inside IntentWizardShell the pick moves the wizard on by itself
+ *             when the step has no StepNav — the step IS the pick. Put a
+ *             StepNav next to it only when the step holds more than the pick.
+ *   multi   — `onToggle(id)` + `selectedIds`: a multipleapplookup ("which
+ *             employees"). Spread `{...f.records('mitarbeiter', x.labelOf)}`
+ *             from useStepForm: the pick then lives in the form, `required`
+ *             means at least one, `validate(['mitarbeiter'])` shows the error
+ *             under the step like any other field, the summary knows the names.
+ *             A live page kept the ids in useState and highlighted only
+ *             `selected[0]` — the second pick was invisible and "Weiter" stayed
+ *             silent. That shape has no API here any more.
+ *
+ * No dead end: a step fed by useRecordSearch on the internal door offers
+ * "Neu anlegen" by itself — the layer renders the entity's required fields
+ * as a mini-form (InlineCreate), creates through the page's port, adopts
+ * the record into the list and picks it. Nothing to write for it; `create`
+ * narrows the fields or switches it off. An empty list says WHY it is empty
+ * (no hits for the query · nothing meets the step's restriction · the entity
+ * has no records yet) and always shows the way on.
  */
 export interface SelectItem {
   id: string;
@@ -33,21 +60,57 @@ export interface SelectItem {
   icon?: ReactNode;
 }
 
-export interface EntitySelectStepProps {
-  items: SelectItem[];
+interface SinglePickProps {
   onSelect: (id: string) => void;
   /** Highlights the current pick (e.g. `form.get('gast') as string`). */
   selectedId?: string | null;
+  selectedIds?: never;
+  onToggle?: never;
+}
+
+interface MultiPickProps {
+  /** Toggles one id in/out of the pick — from `f.records(key)`. */
+  onToggle: (id: string) => void;
+  selectedIds: string[];
+  selectedId?: never;
+  onSelect?: never;
+}
+
+export type PickProps = SinglePickProps | MultiPickProps;
+
+export interface EntitySelectStepBaseProps {
+  items: SelectItem[];
+  /** Element id of the step (from `f.records(key).id`) — what `validate()` focuses. */
+  id?: string;
+  /** Marks the step invalid (required pick missing) — from `f.records(key)`. */
+  invalid?: boolean;
+  'aria-describedby'?: string;
+  /** The tile before the title when an item has no `icon`: two-letter initials
+   *  (people) or nothing (rooms, tools, dates — "Zimmer 101" → "Z1" is noise). */
+  avatar?: 'initials' | 'none';
   searchPlaceholder?: string;
   emptyIcon?: ReactNode;
+  /** Overrides the layer's explanation of an empty list (e.g. what the step's restriction means: "Kein Zimmer ist im Zeitraum frei"). */
   emptyText?: string;
-  /** Label for the "create new" button. If set, the button is shown above the list. */
+  /** Label for the "create new" button (default "Neu erstellen"). */
   createLabel?: string;
-  /** Called when the "create new" button is clicked. Use this to reveal the
-   *  step's own mini-form (never the generic {Entity}Dialog). */
+  /** The mechanical "Neu anlegen": ON whenever `entity`/`port`/`adopt` come
+   *  from `{...x.select}` on the internal door and the entity's required
+   *  fields are plain inputs. `false` switches it off (a step where creating
+   *  makes no sense — picking a day, a fixed catalogue); an object narrows
+   *  the fields or renames the button/panel. */
+  create?: boolean | InlineCreateOptions;
+  /** Hand-written alternative: reveal your own panel on click. Overrides the
+   *  mechanical create. Never the generic {Entity}Dialog. */
   onCreateNew?: () => void;
-  /** Optional: render the mini-form panel alongside the list. */
+  /** Your own mini-form panel, rendered above the list. */
   createDialog?: ReactNode;
+  /** From `{...x.select}` (useRecordSearch) — what the mechanical create and
+   *  the empty-state explanation need. Not meant to be passed by hand. */
+  entity?: EntityKey;
+  port?: JourneyPort;
+  filtered?: boolean;
+  adopt?: (record: JourneyRecord) => void;
   /** Card columns on wide screens. Default: 2 from four items on, else 1. */
   columns?: 1 | 2;
   /** Form of the step. 'auto' (default) follows the count: ≤5 roomy cards without search, ≤50 cards, more: search-first. 'pills' only on request. */
@@ -61,6 +124,19 @@ export interface EntitySelectStepProps {
   loading?: boolean;
   /** Load/search error to show (from useRecordSearch). */
   error?: string | null;
+  /** The rule that narrows this pick, as a sentence ("Nur wo Status ist Aktiv"),
+   *  with the link to the page that changes it — from the flow hook's `.select`. */
+  hint?: { text: string; href?: string } | null;
+}
+
+export type EntitySelectStepProps = EntitySelectStepBaseProps & PickProps;
+
+export interface InlineCreateOptions {
+  /** Fields of the mini-form. Default: the entity's required fields (or its first text field). */
+  fields?: string[];
+  initial?: FormValues;
+  /** Panel heading. Default "Neuer Eintrag: {entity}". */
+  title?: string;
 }
 
 // Eight calm pastel pairs (background / ink) — a deterministic hue per record
@@ -146,24 +222,78 @@ export function EntitySelectStep({
   items,
   onSelect,
   selectedId,
+  onToggle,
+  selectedIds,
+  id,
+  invalid = false,
+  'aria-describedby': describedBy,
   // Destructuring defaults are evaluated on every render, so these follow a
   // language switch without any extra wiring.
   searchPlaceholder = t('search'),
   emptyIcon,
-  emptyText = t('no_results'),
+  emptyText,
   createLabel,
+  create = true,
   onCreateNew,
   createDialog,
+  entity,
+  port,
+  // `filtered` is the hook's word for "a standing restriction is in play";
+  // locally that name belongs to the client-filtered list.
+  filtered: restricted = false,
+  adopt,
   columns,
   mode = 'auto',
   totalCount,
   onSearch,
   loading = false,
   error = null,
+  hint = null,
+  avatar = 'initials',
 }: EntitySelectStepProps) {
   const [search, setSearch] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
+  // The keyboard cursor of the combobox list is only painted once the user
+  // has actually moved it (arrow keys). Painted from the start, row 1 looked
+  // "selected" while the real pick only carried a check mark — two rows with
+  // opposite meaning, same colour. Enter still takes rows[activeIdx] (row 1
+  // after typing), the cursor is just invisible until it is steered.
+  const [cursorVisible, setCursorVisible] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const listId = useId();
+  const wizard = useWizard();
+
+  // One pick shape or the other — the union above makes mixing them a type error.
+  const multi = Array.isArray(selectedIds);
+  const isSelected = (itemId: string): boolean =>
+    multi ? (selectedIds as string[]).includes(itemId) : selectedId != null && itemId === selectedId;
+  // A single pick IS the step's answer: inside a wizard whose current step has
+  // no StepNav it moves on by itself — the `setStep(2)` every page used to
+  // write into onSelect, now owned here so a page that spreads `flow.pick()`
+  // cannot lose it (five live flows dead-ended on step 1, inclou 24.09.2026).
+  // With a StepNav on the step (pick plus other fields) the button decides.
+  const pick = (itemId: string): void => {
+    if (multi) {
+      onToggle?.(itemId);
+      return;
+    }
+    onSelect?.(itemId);
+    if (wizard && !wizard.hasNav()) wizard.next();
+  };
+  // The root carries the form id so validate() can focus and scroll to the
+  // step, and aria-invalid so the state is announced, not only coloured.
+  const rootProps = {
+    id,
+    tabIndex: id ? -1 : undefined,
+    'aria-invalid': invalid || undefined,
+    'aria-describedby': describedBy,
+    className: `space-y-3 rounded-2xl outline-none ${invalid ? 'ring-2 ring-destructive/40 ring-offset-2 ring-offset-background' : ''}`,
+  };
+  const selectedLine = multi && (selectedIds as string[]).length > 0 ? (
+    <p className="text-xs text-muted-foreground" aria-live="polite">
+      {tp('sel_selected', (selectedIds as string[]).length, { n: (selectedIds as string[]).length })}
+    </p>
+  ) : null;
 
   const filtered = useMemo(() => {
     if (!search) return items;
@@ -187,23 +317,69 @@ export function EntitySelectStep({
   useEffect(() => { setActiveIdx(0); }, [search]);
 
   const cols = columns ?? (items.length >= 4 ? 2 : 1);
-  const createButton = onCreateNew ? (
-    <Button type="button" variant="outline" onClick={onCreateNew} className="shrink-0 gap-1.5">
+
+  // ── "Neu anlegen": the page's own panel wins; else the layer's mini-form
+  //    whenever the hook handed over an internal door and the entity's
+  //    required fields are plain inputs (a public grant cannot create a
+  //    second entity, and a required applookup has no inline form).
+  const createOpts: InlineCreateOptions | null = create === false ? null : create === true ? {} : create;
+  const createFields = createOpts && entity ? (createOpts.fields ?? inlineCreateFields(entity)) : [];
+  const mechanicalCreate = Boolean(
+    !onCreateNew && createOpts && entity && port && adopt && port.door === 'internal' && canInlineCreate(entity, createFields),
+  );
+  const openCreate: (() => void) | undefined = onCreateNew ?? (mechanicalCreate ? () => setShowCreate(true) : undefined);
+  const createButton = openCreate ? (
+    <Button type="button" variant="outline" onClick={openCreate} aria-expanded={onCreateNew ? undefined : showCreate} className="shrink-0 gap-1.5">
       <IconPlus size={15} aria-hidden="true" />
       {createLabel ?? t('step_create_new')}
     </Button>
   ) : null;
+  const createPanel = createDialog ?? (mechanicalCreate && showCreate && entity && port && createOpts ? (
+    <InlineCreate
+      entity={entity}
+      port={port}
+      fields={createFields}
+      initial={createOpts.initial}
+      title={createOpts.title}
+      onCancel={() => setShowCreate(false)}
+      onCreated={record => {
+        adopt?.(record);
+        setShowCreate(false);
+        setSearch('');
+        pick(record.id);
+      }}
+    />
+  ) : null);
 
+  // ── The empty list explains itself and shows the way on. Three reasons,
+  //    told apart mechanically: the query matched nothing (clear it), the
+  //    step's restriction left nothing (say so — `emptyText` names the rule),
+  //    the entity is empty (create the first one).
+  const typedQuery = search.trim();
+  const emptyReason = typedQuery.length >= SEARCH_MIN_CHARS || (typedQuery.length > 0 && !onSearch)
+    ? t('sel_no_hits', { q: typedQuery })
+    : emptyText ?? (restricted
+      ? t('sel_empty_filtered')
+      : entity
+        ? t('sel_empty_entity', { entity: entityLabel(entity) })
+        : t('no_results'));
   const emptyBlock = (
-    <div className="text-center py-12 text-muted-foreground">
+    <div className="text-center py-12 text-muted-foreground" role="status">
       {emptyIcon && <div className="mb-3 flex justify-center opacity-40">{emptyIcon}</div>}
-      <p className="text-sm">{emptyText}</p>
-      {onCreateNew && (
-        <Button type="button" variant="outline" size="sm" onClick={onCreateNew} className="mt-3 gap-1.5">
-          <IconPlus size={14} aria-hidden="true" />
-          {createLabel ?? t('step_create_new')}
-        </Button>
-      )}
+      <p className="text-sm">{emptyReason}</p>
+      <div className="mt-3 flex flex-wrap justify-center gap-2">
+        {typedQuery.length > 0 && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSearch('')}>
+            {t('sel_clear_search')}
+          </Button>
+        )}
+        {openCreate && !showCreate && (
+          <Button type="button" variant="outline" size="sm" onClick={openCreate} className="gap-1.5">
+            <IconPlus size={14} aria-hidden="true" />
+            {createLabel ?? t('step_create_new')}
+          </Button>
+        )}
+      </div>
     </div>
   );
 
@@ -216,6 +392,13 @@ export function EntitySelectStep({
 
   const errorLine = message ? (
     <p role="alert" className="text-xs text-destructive">{message}</p>
+  ) : null;
+  // why some records are not on offer — and where the owner changes that
+  const hintLine = hint?.text ? (
+    <p className="text-xs text-muted-foreground" data-journey-hint="">
+      {hint.text}
+      {hint.href && <> · <a href={hint.href} className="text-primary hover:underline">{t('am_change')}</a></>}
+    </p>
   ) : null;
 
   function footer(shownCount: number) {
@@ -230,21 +413,22 @@ export function EntitySelectStep({
   // ── pills: few enough that a search box would be noise ────────────
   if (resolved === 'pills') {
     return (
-      <div className="space-y-3">
+      <div {...rootProps}>
         {createButton && <div className="flex justify-end">{createButton}</div>}
-        {createDialog}
+        {hintLine}
+        {createPanel}
         {errorLine}
         {loading ? loadingBlock : items.length === 0 ? emptyBlock : (
-          <div role="radiogroup" aria-label={searchPlaceholder} className="flex flex-wrap gap-2">
+          <div role={multi ? 'group' : 'radiogroup'} aria-label={searchPlaceholder} className="flex flex-wrap gap-2">
             {items.map(item => {
-              const selected = selectedId != null && item.id === selectedId;
+              const selected = isSelected(item.id);
               return (
                 <button
                   key={item.id}
                   type="button"
-                  role="radio"
+                  role={multi ? 'checkbox' : 'radio'}
                   aria-checked={selected}
-                  onClick={() => onSelect(item.id)}
+                  onClick={() => pick(item.id)}
                   className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                     selected
                       ? 'border-primary bg-accent text-foreground'
@@ -259,6 +443,7 @@ export function EntitySelectStep({
             })}
           </div>
         )}
+        {selectedLine}
       </div>
     );
   }
@@ -273,21 +458,23 @@ export function EntitySelectStep({
     function handleKey(e: React.KeyboardEvent) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        setCursorVisible(true);
         setActiveIdx(i => Math.min(i + 1, rows.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        setCursorVisible(true);
         setActiveIdx(i => Math.max(i - 1, 0));
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const item = rows[activeIdx];
-        if (item) onSelect(item.id);
+        if (item) pick(item.id);
       } else if (e.key === 'Escape') {
         setSearch('');
       }
     }
 
     return (
-      <div className="space-y-3">
+      <div {...rootProps}>
         <div className="flex gap-2">
           <div className="relative flex-1">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -297,11 +484,12 @@ export function EntitySelectStep({
               aria-expanded={true}
               aria-controls={listId}
               aria-autocomplete="list"
+              aria-activedescendant={cursorVisible && rows[activeIdx] ? `${listId}-opt-${activeIdx}` : undefined}
               autoFocus
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setActiveIdx(0); setCursorVisible(false); }}
               onKeyDown={handleKey}
               className="pl-9"
             />
@@ -312,7 +500,8 @@ export function EntitySelectStep({
           {createButton}
         </div>
 
-        {createDialog}
+        {hintLine}
+        {createPanel}
         {errorLine}
 
         {loading ? loadingBlock : tooShort ? (
@@ -321,27 +510,31 @@ export function EntitySelectStep({
           </p>
         ) : rows.length === 0 ? emptyBlock : (
           <>
-            <ul id={listId} role="listbox" className="max-h-[22rem] overflow-y-auto rounded-2xl border border-border divide-y divide-border list-none m-0 p-0">
+            <ul id={listId} role="listbox" aria-multiselectable={multi || undefined} className="max-h-[22rem] overflow-y-auto rounded-2xl border border-border divide-y divide-border list-none m-0 p-0">
               {rows.map((item, idx) => {
-                const selected = selectedId != null && item.id === selectedId;
+                const selected = isSelected(item.id);
+                const cursor = cursorVisible && idx === activeIdx;
                 const [bg, ink] = toneFor(item.id);
+                // Colour says "selected" (accent + check, as in the chip and
+                // card modes); the keyboard cursor is a focus ring, never a fill.
                 return (
                   <li key={item.id} className="min-w-0">
                     <button
                       type="button"
+                      id={`${listId}-opt-${idx}`}
                       role="option"
                       aria-selected={selected}
                       onMouseDown={e => e.preventDefault()}
-                      onClick={() => onSelect(item.id)}
+                      onClick={() => { setActiveIdx(idx); setCursorVisible(false); pick(item.id); }}
                       className={`w-full text-left flex items-center gap-3 px-3.5 py-2.5 transition-colors focus-visible:outline-none ${
-                        idx === activeIdx ? 'bg-accent' : 'bg-card hover:bg-accent/60'
-                      }`}
+                        selected ? 'bg-accent' : 'bg-card hover:bg-muted/60'
+                      } ${cursor ? 'ring-2 ring-inset ring-primary/40' : ''}`}
                     >
                       {item.icon ? (
                         <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 text-primary">
                           {item.icon}
                         </div>
-                      ) : (
+                      ) : avatar === 'none' ? null : (
                         <div
                           className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs font-semibold tracking-wide"
                           style={{ backgroundColor: bg, color: ink }}
@@ -367,6 +560,7 @@ export function EntitySelectStep({
                 );
               })}
             </ul>
+            {selectedLine}
             {typed.length === 0 && (
               <p className="text-xs text-muted-foreground text-center">{t('sel_type_to_search')}</p>
             )}
@@ -389,7 +583,7 @@ export function EntitySelectStep({
   // ── cards: ≤ COMPACT_MAX roomy and without a search box, else with search ──
   const compact = !onSearch && items.length <= COMPACT_MAX;
   return (
-    <div className="space-y-3">
+    <div {...rootProps}>
       {/* Search + Create New row — a handful of records needs no search box */}
       {compact ? (createButton ? <div className="flex justify-end">{createButton}</div> : null) : (
       <div className="flex gap-2">
@@ -416,22 +610,24 @@ export function EntitySelectStep({
       </div>
       )}
 
-      {/* createDialog slot — the step's own inline mini-form (never the
-          generic {Entity}Dialog; check-intents fails the build on that import) */}
-      {createDialog}
+      {/* the create panel — the layer's InlineCreate, or the page's own
+          createDialog (never the generic {Entity}Dialog; check-intents fails
+          the build on that import) */}
+      {hintLine}
+      {createPanel}
       {errorLine}
 
       {loading ? loadingBlock : shown.length === 0 ? emptyBlock : (
         <>
           <ul className={`grid gap-2 list-none m-0 p-0 ${cols === 2 ? 'sm:grid-cols-2' : ''}`}>
             {shown.map(item => {
-              const selected = selectedId != null && item.id === selectedId;
+              const selected = isSelected(item.id);
               const [bg, ink] = toneFor(item.id);
               return (
                 <li key={item.id} className="min-w-0">
                   <button
                     type="button"
-                    onClick={() => onSelect(item.id)}
+                    onClick={() => pick(item.id)}
                     aria-pressed={selected}
                     className={`w-full h-full text-left flex items-start gap-3 ${compact ? 'p-5' : 'p-3.5'} rounded-2xl border transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                       selected
@@ -443,7 +639,7 @@ export function EntitySelectStep({
                       <div className={`${compact ? 'w-12 h-12' : 'w-10 h-10'} rounded-xl bg-primary/10 flex items-center justify-center shrink-0 text-primary`}>
                         {item.icon}
                       </div>
-                    ) : (
+                    ) : avatar === 'none' ? null : (
                       <div
                         className={`${compact ? 'w-12 h-12 text-base' : 'w-10 h-10 text-sm'} rounded-xl flex items-center justify-center shrink-0 font-semibold tracking-wide`}
                         style={{ backgroundColor: bg, color: ink }}
@@ -490,6 +686,7 @@ export function EntitySelectStep({
               );
             })}
           </ul>
+          {selectedLine}
           {footer(shown.length)}
         </>
       )}

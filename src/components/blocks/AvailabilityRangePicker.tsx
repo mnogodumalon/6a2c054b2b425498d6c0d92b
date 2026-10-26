@@ -76,6 +76,11 @@ interface AvailabilityRangePickerProps {
    *  adds that sentence as a caption — `legend={tx('Belegte Nächte sind
    *  ausgegraut.')}` is a valid call, not a type error. */
   legend?: boolean | string;
+  /** What the pair means. 'nights' (default): a stay — "Anreise/Abreise", n Nächte.
+   *  'days': a period — "Beginn/Ende", n Tage (both ends inclusive in the count). */
+  unit?: 'nights' | 'days';
+  /** Any of the picker's own words, when the unit defaults do not fit. */
+  texts?: Partial<{ pickStart: string; pickEnd: string; minHint: string }>;
 }
 
 export function AvailabilityRangePicker({
@@ -86,7 +91,14 @@ export function AvailabilityRangePicker({
   months = 2,
   disablePast = true,
   legend = true,
+  unit = 'nights',
+  texts,
 }: AvailabilityRangePickerProps) {
+  const words = {
+    pickStart: texts?.pickStart ?? (unit === 'days' ? t('arp_pick_start') : t('arp_pick_arrival')),
+    pickEnd: texts?.pickEnd ?? (unit === 'days' ? t('arp_pick_end') : t('arp_pick_departure')),
+    minHint: texts?.minHint ?? (unit === 'days' ? t('arp_hint_min_days', { n: minNights + 1 }) : t('arp_hint_min_nights', { n: minNights })),
+  };
   const locale = dateFnsLocale();
   const todayIso = format(new Date(), DATE_FMT);
   const [cursor, setCursor] = useState(() =>
@@ -106,7 +118,7 @@ export function AvailabilityRangePicker({
       if (rangeIsFree(value.from, iso, blocked)) {
         const n = differenceInCalendarDays(parseISO(iso), parseISO(value.from));
         if (n < minNights) {
-          setHint(t('arp_hint_min_nights', { n: minNights }));
+          setHint(words.minHint);
           return;
         }
         setHint(null);
@@ -128,14 +140,18 @@ export function AvailabilityRangePicker({
   const monthStarts = Array.from({ length: Math.max(1, months) }, (_, i) => addMonths(cursor, i));
 
   return (
-    <div className="space-y-3">
+    // `@container`: the month count follows the CONTAINER, not the viewport.
+    // Two 7×40px months need ~610px; inside the public page's 640px card the
+    // second month was clipped by the card's overflow (live: "one month").
+    // Below @2xl (672px) one month renders and the arrows page through.
+    <div className="@container space-y-3" data-journey-range="">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground" aria-live="polite">
           {value.from && value.to
-            ? tp('arp_nights', nights)
+            ? (unit === 'days' ? tp('arp_days', nights + 1) : tp('arp_nights', nights))
             : selectingDeparture
-              ? t('arp_pick_departure')
-              : t('arp_pick_arrival')}
+              ? words.pickEnd
+              : words.pickStart}
         </p>
         <div className="flex items-center gap-1">
           {value.from ? (
@@ -170,14 +186,14 @@ export function AvailabilityRangePicker({
       {/* Each month is an intrinsically sized 7×40px grid — so the space
           BETWEEN months stays visibly larger than the space between day
           columns, and a divider separates them on wide screens. */}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 sm:gap-0 sm:divide-x sm:divide-border">
-        {monthStarts.slice(0, 2).map(monthStart => {
+      <div className="grid grid-cols-1 @2xl:grid-cols-2 @2xl:divide-x @2xl:divide-border">
+        {monthStarts.slice(0, 2).map((monthStart, index) => {
           const gridStart = startOfWeek(monthStart, { weekStartsOn: 1 });
           const gridEnd = endOfWeek(endOfMonth(monthStart), { weekStartsOn: 1 });
           const days = eachDayOfInterval({ start: gridStart, end: gridEnd });
           const monthIso = format(monthStart, 'yyyy-MM');
           return (
-            <div key={monthIso} className="flex flex-col items-center sm:first:pr-6 sm:last:pl-6">
+            <div key={monthIso} className={`flex-col items-center @2xl:first:pr-6 @2xl:last:pl-6 ${index === 0 ? 'flex' : 'hidden @2xl:flex'}`}>
               <p className="text-sm font-semibold text-center mb-3 capitalize">
                 {format(monthStart, 'LLLL yyyy', { locale })}
               </p>
@@ -224,6 +240,7 @@ export function AvailabilityRangePicker({
                       key={iso}
                       type="button"
                       disabled={past}
+                      data-day={iso}
                       aria-label={format(d, 'PPP', { locale })}
                       aria-pressed={isFrom || isTo}
                       className={`h-10 w-10 text-sm flex items-center justify-center transition-colors ${shape} ${cls}`}

@@ -34,27 +34,48 @@ export function useDashboardData(options: DashboardDataOptions = {}) {
   const [beitraegeZahlungen, setBeitraegeZahlungen] = useState<BeitraegeZahlungen[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  /** Lists the signed-in user may not read (403 on the platform). They load as
+   *  empty and the rest of the page loads normally — one forbidden list used to
+   *  empty the whole dashboard (05.10.2026). Hide a block whose list is here. */
+  const [forbidden, setForbidden] = useState<DashboardEntity[]>([]);
+
+  // Every list on its own: a 403 is „not yours“, any other failure is an error.
+  const settle = useCallback((settled: PromiseSettledResult<unknown>[]) => {
+    const denied: DashboardEntity[] = [];
+    let failure: unknown = null;
+    // null = this list failed for another reason: its current data stays
+    const pick = <T,>(i: number, key: DashboardEntity): T[] | null => {
+      const s = settled[i];
+      if (s.status === 'fulfilled') return s.value as T[];
+      if ((s.reason as { status?: number } | null)?.status === 403) { denied.push(key); return []; }
+      failure = failure ?? s.reason;
+      return null;
+    };
+    { const rows = pick<Veranstaltungsteilnahmen>(0, 'veranstaltungsteilnahmen'); if (rows) setVeranstaltungsteilnahmen(rows); }
+    { const rows = pick<Veranstaltungen>(1, 'veranstaltungen'); if (rows) setVeranstaltungen(rows); }
+    { const rows = pick<Mitglieder>(2, 'mitglieder'); if (rows) setMitglieder(rows); }
+    { const rows = pick<BeitraegeZahlungen>(3, 'beitraege_zahlungen'); if (rows) setBeitraegeZahlungen(rows); }
+    setForbidden(prev => (prev.join('|') === denied.join('|') ? prev : denied));
+    return failure;
+  }, []);
 
   const fetchAll = useCallback(async () => {
     setError(null);
     const omit = new Set(omitKey ? omitKey.split('|') : []);
     try {
-      const [veranstaltungsteilnahmenData, veranstaltungenData, mitgliederData, beitraegeZahlungenData] = await Promise.all([
+      const failure = settle(await Promise.allSettled([
         omit.has('veranstaltungsteilnahmen') ? Promise.resolve([] as Veranstaltungsteilnahmen[]) : LivingAppsService.getVeranstaltungsteilnahmen(),
         omit.has('veranstaltungen') ? Promise.resolve([] as Veranstaltungen[]) : LivingAppsService.getVeranstaltungen(),
         omit.has('mitglieder') ? Promise.resolve([] as Mitglieder[]) : LivingAppsService.getMitglieder(),
         omit.has('beitraege_zahlungen') ? Promise.resolve([] as BeitraegeZahlungen[]) : LivingAppsService.getBeitraegeZahlungen(),
-      ]);
-      setVeranstaltungsteilnahmen(veranstaltungsteilnahmenData);
-      setVeranstaltungen(veranstaltungenData);
-      setMitglieder(mitgliederData);
-      setBeitraegeZahlungen(beitraegeZahlungenData);
+      ]));
+      if (failure) throw failure;
     } catch (err) {
       setError(err instanceof Error ? err : new Error(t('data_load_failed')));
     } finally {
       setLoading(false);
     }
-  }, [omitKey]);
+  }, [omitKey, settle]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -63,16 +84,14 @@ export function useDashboardData(options: DashboardDataOptions = {}) {
     const omit = new Set(omitKey ? omitKey.split('|') : []);
     async function silentRefresh() {
       try {
-        const [veranstaltungsteilnahmenData, veranstaltungenData, mitgliederData, beitraegeZahlungenData] = await Promise.all([
+        // a failed list keeps its stale data out of the way: settle() only
+        // replaces what loaded or was refused
+        settle(await Promise.allSettled([
           omit.has('veranstaltungsteilnahmen') ? Promise.resolve([] as Veranstaltungsteilnahmen[]) : LivingAppsService.getVeranstaltungsteilnahmen(),
           omit.has('veranstaltungen') ? Promise.resolve([] as Veranstaltungen[]) : LivingAppsService.getVeranstaltungen(),
           omit.has('mitglieder') ? Promise.resolve([] as Mitglieder[]) : LivingAppsService.getMitglieder(),
           omit.has('beitraege_zahlungen') ? Promise.resolve([] as BeitraegeZahlungen[]) : LivingAppsService.getBeitraegeZahlungen(),
-        ]);
-        setVeranstaltungsteilnahmen(veranstaltungsteilnahmenData);
-        setVeranstaltungen(veranstaltungenData);
-        setMitglieder(mitgliederData);
-        setBeitraegeZahlungen(beitraegeZahlungenData);
+        ]));
       } catch {
         // silently ignore — stale data is better than no data
       }
@@ -84,7 +103,7 @@ export function useDashboardData(options: DashboardDataOptions = {}) {
     // both here, or every mutation fetches twice.
     window.addEventListener('assistant:data-changed', handleRefresh);
     return () => window.removeEventListener('assistant:data-changed', handleRefresh);
-  }, [omitKey]);
+  }, [omitKey, settle]);
 
   const veranstaltungenMap = useMemo(() => {
     const m = new Map<string, Veranstaltungen>();
@@ -98,7 +117,7 @@ export function useDashboardData(options: DashboardDataOptions = {}) {
     return m;
   }, [mitglieder]);
 
-  return { veranstaltungsteilnahmen, setVeranstaltungsteilnahmen, veranstaltungen, setVeranstaltungen, mitglieder, setMitglieder, beitraegeZahlungen, setBeitraegeZahlungen, loading, error, fetchAll, veranstaltungenMap, mitgliederMap };
+  return { veranstaltungsteilnahmen, setVeranstaltungsteilnahmen, veranstaltungen, setVeranstaltungen, mitglieder, setMitglieder, beitraegeZahlungen, setBeitraegeZahlungen, loading, error, fetchAll, forbidden, veranstaltungenMap, mitgliederMap };
 }
 
 /** The hook's return — the `data` prop of DashboardOverview in the Ready-Wrapper form. */

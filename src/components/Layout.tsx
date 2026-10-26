@@ -1,11 +1,11 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { useState, useEffect, useRef } from 'react';
-import { ActionsSidebar } from '@/components/ActionsSidebar';
 import { IntentsNav } from '@/components/IntentsNav';
-import { PublicPagesNav } from '@/components/PublicPagesNav';
+import { ActionsSidebar } from '@/components/ActionsSidebar';
 import { Button } from '@/components/ui/button';
 import { VersionCheck } from '@/components/VersionCheck';
+import { PlanNotice } from '@/components/PlanNotice';
 // Sprachwechsel kommt aus der Plattform-Topnav: sie schreibt <html lang>,
 // src/i18n beobachtet das Attribut und LocaleGate remountet den Baum.
 import { t, appgroupLabel } from '@/i18n';
@@ -131,32 +131,63 @@ export function Layout() {
             </la-nav-section>
           </la-nav-section>
 
-          {/* Produktivitäts-Sektion (Figma-Muster): zusätzliche Funktionen —
-              Abläufe und Öffentliche Seiten als aufklappbare Gruppen
-              (starten zu), Werkzeuge als schlichter Eintrag (öffnet den
-              Werkzeuge-Drawer des Assistenten), dann die Version als
-              Meta-Zeile. Klar Lab und
-              die Entwickler/Beta-Toggles stecken im Versions-Panel. */}
-          <la-nav-section type="secondary" label={t('actions_section')}>
+          {/* Abläufe — a section like the platform's own lists: one row per
+              flow, the gear row 'Abläufe verwalten' last. Creating, changing
+              and removing flows happens on that page, as 'Seiten verwalten'
+              does for public pages. */}
+          <la-nav-section type="secondary" label={t('intents_heading')}>
             <IntentsNav />
-            <ActionsSidebar />
-            <PublicPagesNav />
-            <div className="pt-2">
-              <VersionCheck />
-            </div>
           </la-nav-section>
 
-          {/* Sticky Footer = dünne Meta-Zeile (Figma-Muster). Relative
-              Pfade, damit die Plattform-Seiten auf jedem Host stimmen. */}
-          <div slot="footer" className="flex flex-wrap justify-center gap-x-4 gap-y-1 border-t border-sidebar-border py-3 text-sm font-medium text-muted-foreground">
-            <a href="/impressum.htm" className="hover:text-foreground transition-colors">{t('legal_imprint')}</a>
-            <a href="/datenschutz.htm" className="hover:text-foreground transition-colors">{t('legal_privacy')}</a>
-            <a href="/apps.htm" className="hover:text-foreground transition-colors">LivingApps</a>
+          {/* Aktionen and Dateien — the platform's own widgets, as in the UL4
+              sidebar: la-actions-widget lists the app group's actions from the
+              actions-agent (row = run, code and description buttons, the last
+              row 'Alle Aktionen' opens the full list); la-action-files-widget
+              lists files those actions produced and hides itself — section
+              included — while there are none. Below the widget one more row,
+              'Werkzeuge' (ActionsSidebar), opens the assistant's drawer
+              (<la-klar-assistant actions-open>) — the only place with run,
+              files, triggers, last run, versions and chat per action; the
+              widget alone had lost that entry point in 0.0.386 (0.0.407).
+              New actions are created in the assistant's chat. */}
+          <la-nav-section type="secondary" label={t('actions_section')}>
+            <la-actions-widget group-id={APPGROUP_ID} />
+            <ActionsSidebar />
+          </la-nav-section>
+          <la-nav-section type="secondary" label={t('files_section')}>
+            <la-action-files-widget group-id={APPGROUP_ID} />
+          </la-nav-section>
+
+          {/* Öffentliche Seiten — the platform's own widget, the very element
+              the UL4 template's sidebar renders: it reads this dashboard's
+              public-pages.json, lists every published page (globe icon, opens
+              in a new tab) and ends with the gear row 'Seiten verwalten' →
+              #/verwaltung/oeffentliche-seiten. */}
+          <la-nav-section type="secondary" label={t('ppn_heading')}>
+            <la-public-pages-widget group-id={APPGROUP_ID} />
+          </la-nav-section>
+
+          {/* Sticky Footer, ganz unten: die Version als Meta-Zeile (kein
+              Plattform-Gegenstück; Klar Lab und die Entwickler/Beta-Toggles
+              stecken im Versions-Panel), darunter die dünne Rechtszeile
+              (Figma-Muster). Relative Pfade, damit die Plattform-Seiten auf
+              jedem Host stimmen. */}
+          <div slot="footer" className="border-t border-sidebar-border">
+            <div className="px-2 pt-2">
+              <VersionCheck />
+            </div>
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 py-3 text-sm font-medium text-muted-foreground">
+              <a href="/impressum.htm" className="hover:text-foreground transition-colors">{t('legal_imprint')}</a>
+              <a href="/datenschutz.htm" className="hover:text-foreground transition-colors">{t('legal_privacy')}</a>
+              <a href="/apps.htm" className="hover:text-foreground transition-colors">LivingApps</a>
+            </div>
           </div>
         </la-drawer>
       )}
 
-      <div className="[grid-area:center] min-w-0">
+      {/* center = eigener Scroll-Container (min-h-0 + overflow-y-auto, wie
+          <main> auf den Plattform-Seiten); der Drawer links bleibt stehen. */}
+      <div className="[grid-area:center] min-w-0 min-h-0 overflow-y-auto">
         <main className={`max-w-screen-2xl ${IS_EMBED ? "p-2 lg:p-4" : "p-6 lg:p-8"}`}>
           {authError ? (
             <div className="flex flex-col items-center justify-center py-24 gap-4">
@@ -171,7 +202,10 @@ export function Layout() {
               }}>{t('auth_login_button')}</Button>
             </div>
           ) : (
-            <Outlet />
+            <>
+              {location.pathname === '/' && <PlanNotice />}
+              <Outlet />
+            </>
           )}
         </main>
       </div>

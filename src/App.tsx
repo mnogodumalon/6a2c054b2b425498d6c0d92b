@@ -8,7 +8,28 @@ import { ErrorBusProvider } from '@/components/ErrorBus';
 import { Layout } from '@/components/Layout';
 import DashboardReady from '@/pages/DashboardReady';
 import PublicPagesAdmin from '@/pages/PublicPagesAdmin';
+import PublicPageFields from '@/pages/PublicPageFields';
+import IntentFields from '@/pages/IntentFields';
+import { IntentPolicyLoader } from '@/components/IntentPolicyLoader';
+import IntentsAdmin from '@/pages/IntentsAdmin';
+import AppMap from '@/pages/AppMap';
 // <custom:imports>
+// Lazy: public pages live outside <Layout> and only load on /#/public/:slug —
+// dashboard users never pay for them, anonymous visitors skip the dashboard.
+
+
+// Language switch = full remount below the router: every t()/label lookup
+// re-evaluates, the la-* widgets re-read <html lang>. Sits inside HashRouter
+// so the current route survives (it re-reads the URL hash).
+
+
+// The assistant (chat + Werkzeuge + code viewer) is platform chrome:
+// <la-klar-assistant>, loaded via /actions-agent/embed/embed.js (appended
+// dynamically in index.html). Own shadow DOM, own styling. Mounted OUTSIDE
+// LocaleGate on purpose — its keyed remounts (locale switch, catalog
+// arrival) must not tear the element down mid-chat; the element follows
+// <html lang> itself. Hidden on anonymous public routes; its 401 guard is
+// the backstop, not the mechanism.
 // </custom:imports>
 
 // Lazy: public pages live outside <Layout> and only load on /#/public/:slug —
@@ -68,12 +89,17 @@ export default function App() {
       <ErrorBusProvider>
         <HashRouter>
             <AssistantMount />
+            <IntentPolicyLoader />
             <LocaleGate>
             <Routes>
               <Route path="public/:slug" element={<Suspense fallback={null}><PublicPage /></Suspense>} />
               <Route element={<Layout />}>
                 <Route index element={<DashboardReady />} />
+                <Route path="verwaltung/ablaeufe" element={<IntentsAdmin />} />
+                <Route path="verwaltung/anwendung" element={<AppMap />} />
+                <Route path="verwaltung/ablaeufe/:slug/felder" element={<IntentFields />} />
                 <Route path="verwaltung/oeffentliche-seiten" element={<PublicPagesAdmin />} />
+                <Route path="verwaltung/oeffentliche-seiten/:slug/felder" element={<PublicPageFields />} />
                 {/* <custom:routes> */}
                 {/* </custom:routes> */}
                 {/* An unknown hash (a bookmark from before a rebuild renamed the

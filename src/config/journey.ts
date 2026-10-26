@@ -1,10 +1,10 @@
 /**
- * Occupancy semantics — DECIDED BY THE BUILD AGENT, never by a heuristic.
- *
- * The Phase-2 orchestrator writes its decision to `.intents-staging/occupancy.json`
- * (stay pair, booked resource, statuses that do not occupy); the integration
- * step validates it against the app metadata and renders it into the block
- * below. Scaffold updates keep the block. Do not edit outside the markers.
+ * Occupancy semantics — DECIDED BY THE PLAN when it has a no_overlap check
+ * (rendered below, generator-owned), else by the build agent, never by a
+ * heuristic. Without a plan the Phase-2 orchestrator writes its decision to
+ * `.intents-staging/occupancy.json` (stay pair, booked resource, statuses
+ * that do not occupy); the integration step validates it against the app
+ * metadata and renders it into the block below. Do not edit outside the markers.
  *
  * Both doors read this and nothing else: `occupancyFor` (internal flows AND
  * public pages) and the owner service (the public grant's occupancy read).
@@ -14,7 +14,7 @@
  * Facts from the metadata — candidates, NOT decisions:
  *   - veranstaltungsteilnahmen: applookups mitglied→mitglieder, veranstaltung→veranstaltungen
  *   - veranstaltungen: lookups veranstaltungsart[vortrag|workshop|mitgliederversammlung|networking|sonstiges]
- *   - mitglieder: lookups mitgliedsstatus[passiv|ehrenmitglied|ausgetreten|aktiv]
+ *   - mitglieder: lookups mitgliedsstatus[aktiv|passiv|ehrenmitglied|ausgetreten]
  *   - beitraege_zahlungen: applookups mitglied→mitglieder · lookups zahlungsart[ueberweisung|lastschrift|bar], zahlungsstatus[offen|bezahlt|gemahnt|storniert]
  */
 import type { EntityKey } from '@/lib/journey/rules';
@@ -34,4 +34,20 @@ export interface OccupancyRule {
 export const OCCUPANCY: Partial<Record<EntityKey, OccupancyRule>> = {
   // <custom:occupancy>
   // </custom:occupancy>
+};
+
+/**
+ * A record of the KEY entity is TAKEN while a record of `entity` points at it
+ * through `field` — a slot with a booking, a seat with a ticket. Generated
+ * from the plan's blocking `unique` check on that reference (05.10.2026:
+ * the salon's public page offered booked slots again). Pickers on both
+ * doors leave taken records out (useRecordSearch); a public page reads only
+ * `field` of `entity` — never who booked. Generator-owned: no markers.
+ */
+export interface TakenRule {
+  entity: EntityKey;
+  field: string;
+}
+
+export const TAKEN_BY: Partial<Record<EntityKey, TakenRule>> = {
 };

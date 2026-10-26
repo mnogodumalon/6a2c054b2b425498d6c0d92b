@@ -2,11 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { IconCheck, IconCircleCheck, IconCopy, IconPrinter } from '@tabler/icons-react';
 import { t } from '@/i18n';
-import { makeReference } from '@/lib/journey/reference';
 import { entityLabel } from '@/lib/journey/rules';
 import type { StepForm, SummaryItem } from '@/lib/journey/useStepForm';
-import type { JourneyResult } from '@/lib/journey/useJourneySubmit';
+import type { JourneyResult, JourneySubmit } from '@/lib/journey/useJourneySubmit';
 import { useWizard } from './IntentWizardShell';
+import { resolveFlowHref } from '@/lib/journey/flowLinks';
+import { INTENTS } from '@/config/intents';
 
 /**
  * SuccessStep — the end of a journey that keeps working.
@@ -19,10 +20,12 @@ import { useWizard } from './IntentWizardShell';
  *
  * Renders ONLY from a `JourneyResult` — the runner sets it after every write
  * succeeded, so this screen can never appear over a half-written journey or
- * be derived from a refetched list. Shows a deterministic reference
- * (`B-42D81A`, from the record id — nothing to store), the facts of what was
- * created, the next logical actions (first = primary), and lets the user copy
- * or print the confirmation.
+ * be derived from a refetched list. Shows the facts of what was created, the
+ * next logical actions (first = primary), and lets the user copy or print the
+ * confirmation. The technical reference (`B-42D81A`, `makeReference` in
+ * lib/journey/reference.ts) is deliberately NOT shown: nothing in the
+ * dashboard accepts it yet, and entities with a business number carry that
+ * number in their facts. Bring it back when a search takes it.
  */
 export interface SuccessAction {
   label: string;
@@ -43,8 +46,18 @@ export interface SuccessStepProps {
   /** … or passed explicitly. */
   facts?: Array<Pick<SummaryItem, 'label' | 'value'>>;
   whatHappensNext?: ReactNode;
-  /** Reference prefix (default: first letter of the entity). */
+  /** Reserved: prefix for a shown reference. Currently unused — the success
+   *  screen shows no technical reference (see docblock). */
   referencePrefix?: string;
+  /** The heading's verb. Default: from `result.created` ("angelegt" / "aktualisiert"). */
+  verb?: 'created' | 'updated';
+  /** With the runner given, the first action is "Noch einmal": resets the plan, the forms and
+   *  jumps to step 1 — the five-line `restart` every page used to write. */
+  submit?: JourneySubmit;
+  restartLabel?: string;
+  /** Copy and print are offered by default — an internal status flip may want neither. */
+  actions?: { copy?: boolean; print?: boolean };
+  printLabel?: string;
   children?: ReactNode;
 }
 
@@ -55,9 +68,16 @@ export function SuccessStep({
   forms = [],
   facts,
   whatHappensNext,
-  referencePrefix,
+  verb,
+  submit,
+  restartLabel,
+  actions,
+  printLabel,
   children,
 }: SuccessStepProps) {
+  const showCopy = actions?.copy ?? true;
+  const showPrint = actions?.print ?? true;
+  const created = verb ? verb === 'created' : result.created !== false;
   const [copied, setCopied] = useState(false);
   const wizard = useWizard();
 
@@ -71,20 +91,24 @@ export function SuccessStep({
   const suppressHeading = wizard?.suppressHeading;
   useEffect(() => suppressHeading?.(), [suppressHeading]);
 
-  // An update-only journey (return a tool, check a guest out) has no new record
-  // and therefore no reference — the screen then shows heading and facts only.
-  const reference = result.primary.id ? makeReference(result.entity ?? '', result.primary.id, referencePrefix) : null;
-  const heading = title ?? (result.entity && result.primary.id ? t('sx_default_title', { entity: entityLabel(result.entity) }) : t('sx_saved'));
-  const rows = (facts ?? forms.flatMap(f => f.summary()).filter(r => r.value !== '—')).slice(0, 10);
+  const heading = title ?? (result.entity && result.primary.id
+    ? t(created ? 'sx_default_title' : 'sx_default_title_updated', { entity: entityLabel(result.entity) })
+    : t('sx_saved'));
+  // Facts: explicit `facts`, else the forms' filled rows, else what the review
+  // step showed — an update-only journey keeps its answers in page state, so
+  // without this the success screen was a heading over nothing (live: ticket
+  // assignment). The review remembers its rows on confirm; the result carries them.
+  const formRows = forms.flatMap(f => f.summary()).filter(r => r.value !== '—');
+  const rows = (facts ?? (formRows.length > 0 ? formRows : (result.summary ?? []).filter(r => r.value !== '—'))).slice(0, 10);
 
   const copy = async () => {
-    const lines = [heading, ...(reference ? [`${t('sx_reference')}: ${reference}`] : []), ...rows.map(r => `${r.label}: ${r.value}`)];
+    const lines = [heading, ...rows.map(r => `${r.label}: ${r.value}`)];
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* clipboard blocked — the reference is still on screen */
+      /* clipboard blocked — the facts are still on screen */
     }
   };
 
@@ -93,8 +117,32 @@ export function SuccessStep({
     else if (action.href) window.location.href = action.href;
   };
 
+  // A follow-up link to a flow this bundle does not have (a lane guessed its
+  // neighbour's slug) goes to the one registered flow that fits, else nowhere —
+  // never to "Diese Seite gibt es nicht" (live).
+  const flowPaths = INTENTS.map(i => i.path);
+  const restart: SuccessAction[] = submit ? [{
+    label: restartLabel ?? t('sx_restart'),
+    onClick: () => { submit.reset(); forms.forEach(f => f.reset()); wizard?.goTo(1); },
+  }] : [];
+  // One button per label: a page that passes the same wording as `restartLabel`
+  // AND as a `next` action (live: "Weitere Anfrage stellen" twice) gets one.
+  const seenLabels = new Set<string>();
+  const followUps = [...restart, ...next].flatMap((action): SuccessAction[] => {
+    const key = action.label.trim().toLowerCase();
+    if (seenLabels.has(key)) return [];
+    seenLabels.add(key);
+    if (!action.href) return [action];
+    const href = resolveFlowHref(action.href, flowPaths);
+    if (href === null) {
+      console.warn(`SuccessStep: no flow at '${action.href}' — registered: ${flowPaths.join(', ') || 'none'}; action '${action.label}' dropped`);
+      return [];
+    }
+    return [{ ...action, href }];
+  });
+
   return (
-    <div className="journey-print space-y-6" data-journey-success="" data-reference={reference ?? undefined}>
+    <div className="journey-print space-y-6" data-journey-success="">
       <style>{`@media print { body * { visibility: hidden; } .journey-print, .journey-print * { visibility: visible; } .journey-print { position: absolute; left: 0; top: 0; width: 100%; } .journey-print [data-no-print] { display: none !important; } }`}</style>
 
       <div className="flex items-start gap-4">
@@ -103,20 +151,16 @@ export function SuccessStep({
         </div>
         <div className="min-w-0">
           <h2 className="text-xl font-semibold tracking-tight">{heading}</h2>
-          {reference && (
-            <p className="text-sm text-muted-foreground mt-1">
-              {t('sx_reference')}: <span className="font-mono font-semibold text-foreground tracking-wide">{reference}</span>
-            </p>
-          )}
         </div>
       </div>
 
+      {/* `@container` like SummaryStep: columns follow the card, not the viewport. */}
       {rows.length > 0 && (
-        <dl className="rounded-2xl border border-border bg-card divide-y divide-border">
+        <dl className="rounded-2xl border border-border bg-card divide-y divide-border @container">
           {rows.map((r, i) => (
-            <div key={`${r.label}-${i}`} className="grid grid-cols-1 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] gap-x-4 px-5 py-2.5 items-baseline">
+            <div key={`${r.label}-${i}`} className="grid grid-cols-1 @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] gap-x-4 px-5 py-2.5 items-baseline">
               <dt className="text-sm text-muted-foreground">{r.label}</dt>
-              <dd className="text-sm font-medium break-words">{r.value}</dd>
+              <dd className="text-sm font-medium break-words min-w-0">{r.value}</dd>
             </div>
           ))}
         </dl>
@@ -134,21 +178,25 @@ export function SuccessStep({
       )}
 
       <div className="flex flex-wrap items-center gap-2" data-no-print="">
-        {next.map((action, i) => (
+        {followUps.map((action, i) => (
           <Button key={`${action.label}-${i}`} type="button" variant={i === 0 ? 'default' : 'outline'} onClick={() => go(action)} className="gap-1.5">
             {action.icon}
             {action.label}
           </Button>
         ))}
         <span className="flex-1" />
-        <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} className="gap-1.5">
-          {copied ? <IconCheck size={16} aria-hidden="true" /> : <IconCopy size={16} aria-hidden="true" />}
-          {copied ? t('sx_copied') : t('sx_copy')}
-        </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={() => window.print()} className="gap-1.5">
-          <IconPrinter size={16} aria-hidden="true" />
-          {t('sx_print')}
-        </Button>
+        {showCopy && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} className="gap-1.5">
+            {copied ? <IconCheck size={16} aria-hidden="true" /> : <IconCopy size={16} aria-hidden="true" />}
+            {copied ? t('sx_copied') : t('sx_copy')}
+          </Button>
+        )}
+        {showPrint && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => window.print()} className="gap-1.5">
+            <IconPrinter size={16} aria-hidden="true" />
+            {printLabel ?? t('sx_print')}
+          </Button>
+        )}
       </div>
     </div>
   );

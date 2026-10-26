@@ -29,6 +29,15 @@ declare namespace React {
         'show-dashboard'?: string;
       }>;
       'la-dashboard-link-widget': LaWidgetProps<{ 'app-id'?: string }>;
+      /** Sidebar list of the app group's public pages — the platform's own
+       *  widget (UL4 sidebar): reads /objects/<group>/public-pages.json, one
+       *  row per published page, then 'Seiten verwalten'. */
+      'la-public-pages-widget': LaWidgetProps<{ 'group-id'?: string; 'app-id'?: string }>;
+      /** Sidebar list of the app group's actions (actions-agent): run, code,
+       *  description per row, 'Alle Aktionen' last. */
+      'la-actions-widget': LaWidgetProps<{ 'group-id'?: string; 'app-id'?: string; 'max-items'?: string }>;
+      /** Files produced by actions; hides itself while there are none. */
+      'la-action-files-widget': LaWidgetProps<{ 'group-id'?: string; 'app-id'?: string; 'max-items'?: string }>;
       'la-app-group-copy-widget': LaWidgetProps<{
         open?: boolean;
         'data-grp-id'?: string;
@@ -64,7 +73,6 @@ declare namespace React {
         scroll?: boolean;
         'max-height'?: string;
         collapsed?: boolean;
-        dense?: boolean;
       }>;
     }
   }

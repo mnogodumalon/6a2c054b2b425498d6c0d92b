@@ -27,6 +27,7 @@ import type { ComputedContext } from '@/config/form-enhancements/types';
 import { applyFieldOrder, flattenFieldOrder, applyDefaults, evalComputed, numberInputProps, clampNumberValue, classifyComputed, extractApplookupRefs, mergeApplookupRefs, resolveApplookupRef } from '@/config/form-enhancements/types';
 import { formEnhancements, computedDeps, computedApplookupRefs } from '@/config/form-enhancements/Mitglieder';
 import { AttachmentsSection } from '@/components/AttachmentsSection';
+import { requiredMessage } from '@/lib/journey/messages';
 import { t, appLabel, fieldLabel, lookupLabel, localeTag, CURRENCY } from '@/i18n';
 import { Textarea } from '@/components/ui/textarea';
 import { DatePicker } from '@/components/DatePicker';
@@ -88,6 +89,8 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
       return true;
     }
   }, [fields, normalizedDefaults]);
+  // Fields the plan assigns to a tool (empty without a plan).
+  const SYSTEM_ASSIGNED: string[] = [];
   const [showErrors, setShowErrors] = useState(false);
   const REQUIRED_FIELDS = ['email', 'eintrittsdatum', 'mitgliedsstatus', 'vorname', 'nachname'] as const;
   const missingRequired = REQUIRED_FIELDS.filter(k => {
@@ -242,7 +245,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         }
       }
       const photoContext = contextParts.length ? contextParts.join('\n') : undefined;
-      const schema = `{\n  "geburtsdatum": string | null, // YYYY-MM-DD\n  "email": string | null, // E-Mail-Adresse\n  "telefon": string | null, // Telefonnummer\n  "strasse": string | null, // Straße\n  "hausnummer": string | null, // Hausnummer\n  "plz": string | null, // Postleitzahl\n  "ort": string | null, // Ort\n  "mitgliedsnummer": string | null, // Mitgliedsnummer\n  "eintrittsdatum": string | null, // YYYY-MM-DD\n  "mitgliedsstatus": LookupValue | null, // Mitgliedsstatus (select one key: "passiv" | "ehrenmitglied" | "ausgetreten" | "aktiv") mapping: passiv=Passiv, ehrenmitglied=Ehrenmitglied, ausgetreten=Ausgetreten, aktiv=Aktiv\n  "iban": string | null, // IBAN (für Lastschrift)\n  "bemerkungen": string | null, // Bemerkungen\n  "vorname": string | null, // Vorname\n  "nachname": string | null, // Nachname\n}`;
+      const schema = `{\n  "geburtsdatum": string | null, // YYYY-MM-DD\n  "email": string | null, // E-Mail-Adresse\n  "telefon": string | null, // Telefonnummer\n  "strasse": string | null, // Straße\n  "hausnummer": string | null, // Hausnummer\n  "plz": string | null, // Postleitzahl\n  "ort": string | null, // Ort\n  "mitgliedsnummer": string | null, // Mitgliedsnummer\n  "eintrittsdatum": string | null, // YYYY-MM-DD\n  "mitgliedsstatus": LookupValue | null, // Mitgliedsstatus (select one key: "aktiv" | "passiv" | "ehrenmitglied" | "ausgetreten") mapping: aktiv=Aktiv, passiv=Passiv, ehrenmitglied=Ehrenmitglied, ausgetreten=Ausgetreten\n  "iban": string | null, // IBAN (für Lastschrift)\n  "bemerkungen": string | null, // Bemerkungen\n  "vorname": string | null, // Vorname\n  "nachname": string | null, // Nachname\n}`;
       const raw = await extractFromInput<Record<string, unknown>>(schema, {
         dataUri: uri,
         userText: aiText.trim() || undefined,
@@ -309,7 +312,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="geburtsdatum">{fieldLabel('mitglieder', 'geburtsdatum')}</Label>
         <DatePicker
           id="geburtsdatum"
-          placeholder="Wann geboren?"
+          placeholder=""
           mode="date"
           value={fields.geburtsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, geburtsdatum: v ?? undefined }))}
@@ -322,12 +325,14 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Input
           id="email"
           type="email"
-          placeholder="z. B. max@example.com"
+          inputMode="email"
+          placeholder=""
           value={fields.email ?? ''}
           onChange={e => setFields(f => ({ ...f, email: e.target.value }))}
+          required
         />
         {showErrors && !fields.email && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('mitglieder', 'email')}</p>
         )}
       </div>
     ),
@@ -336,6 +341,9 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="telefon">{fieldLabel('mitglieder', 'telefon')}</Label>
         <Input
           id="telefon"
+          type="tel"
+          inputMode="tel"
+          placeholder=""
           value={fields.telefon ?? ''}
           onChange={e => setFields(f => ({ ...f, telefon: e.target.value }))}
         />
@@ -346,7 +354,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="strasse">{fieldLabel('mitglieder', 'strasse')}</Label>
         <Input
           id="strasse"
-          placeholder="z. B. Hauptstraße"
+          placeholder=""
           value={fields.strasse ?? ''}
           onChange={e => setFields(f => ({ ...f, strasse: e.target.value }))}
         />
@@ -357,7 +365,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="hausnummer">{fieldLabel('mitglieder', 'hausnummer')}</Label>
         <Input
           id="hausnummer"
-          placeholder="z. B. 42"
+          placeholder=""
           value={fields.hausnummer ?? ''}
           onChange={e => setFields(f => ({ ...f, hausnummer: e.target.value }))}
         />
@@ -368,7 +376,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="plz">{fieldLabel('mitglieder', 'plz')}</Label>
         <Input
           id="plz"
-          placeholder="z. B. 95444"
+          placeholder=""
           value={fields.plz ?? ''}
           onChange={e => setFields(f => ({ ...f, plz: e.target.value }))}
         />
@@ -379,7 +387,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="ort">{fieldLabel('mitglieder', 'ort')}</Label>
         <Input
           id="ort"
-          placeholder="z. B. Bayreuth"
+          placeholder=""
           value={fields.ort ?? ''}
           onChange={e => setFields(f => ({ ...f, ort: e.target.value }))}
         />
@@ -390,7 +398,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="mitgliedsnummer">{fieldLabel('mitglieder', 'mitgliedsnummer')}</Label>
         <Input
           id="mitgliedsnummer"
-          placeholder="z. B. M-2026-001"
+          placeholder=""
           value={fields.mitgliedsnummer ?? ''}
           onChange={e => setFields(f => ({ ...f, mitgliedsnummer: e.target.value }))}
         />
@@ -401,14 +409,14 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="eintrittsdatum">{fieldLabel('mitglieder', 'eintrittsdatum')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <DatePicker
           id="eintrittsdatum"
-          placeholder="Wann beigetreten?"
+          placeholder=""
           mode="date"
           value={fields.eintrittsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, eintrittsdatum: v ?? undefined }))}
           required
         />
         {showErrors && !fields.eintrittsdatum && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('mitglieder', 'eintrittsdatum')}</p>
         )}
       </div>
     ),
@@ -416,6 +424,19 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
       <div key="mitgliedsstatus" className="space-y-1.5">
         <Label htmlFor="mitgliedsstatus">{fieldLabel('mitglieder', 'mitgliedsstatus')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <div role="radiogroup" className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={lookupKey(fields.mitgliedsstatus) === 'aktiv'}
+            onClick={() => setFields(f => ({ ...f, mitgliedsstatus: (lookupKey(f.mitgliedsstatus) === 'aktiv' ? undefined : 'aktiv') as any }))}
+            className={`inline-flex items-center justify-center min-h-9 max-sm:min-h-11 max-sm:px-4 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+              lookupKey(fields.mitgliedsstatus) === 'aktiv'
+                ? 'bg-foreground text-background border-foreground'
+                : 'bg-background text-foreground border-input hover:bg-accent'
+            }`}
+          >
+            {lookupLabel('mitglieder', 'mitgliedsstatus', 'aktiv') ?? 'Aktiv'}
+          </button>
           <button
             type="button"
             role="radio"
@@ -455,22 +476,9 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
           >
             {lookupLabel('mitglieder', 'mitgliedsstatus', 'ausgetreten') ?? 'Ausgetreten'}
           </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={lookupKey(fields.mitgliedsstatus) === 'aktiv'}
-            onClick={() => setFields(f => ({ ...f, mitgliedsstatus: (lookupKey(f.mitgliedsstatus) === 'aktiv' ? undefined : 'aktiv') as any }))}
-            className={`inline-flex items-center justify-center min-h-9 max-sm:min-h-11 max-sm:px-4 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-              lookupKey(fields.mitgliedsstatus) === 'aktiv'
-                ? 'bg-foreground text-background border-foreground'
-                : 'bg-background text-foreground border-input hover:bg-accent'
-            }`}
-          >
-            {lookupLabel('mitglieder', 'mitgliedsstatus', 'aktiv') ?? 'Aktiv'}
-          </button>
         </div>
         {showErrors && !fields.mitgliedsstatus && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('mitglieder', 'mitgliedsstatus')}</p>
         )}
       </div>
     ),
@@ -479,7 +487,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="iban">{fieldLabel('mitglieder', 'iban')}</Label>
         <Input
           id="iban"
-          placeholder="z. B. DE89 3704 0044 0532 0130 00"
+          placeholder=""
           value={fields.iban ?? ''}
           onChange={e => setFields(f => ({ ...f, iban: e.target.value }))}
         />
@@ -490,7 +498,7 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="bemerkungen">{fieldLabel('mitglieder', 'bemerkungen')}</Label>
         <Textarea
           id="bemerkungen"
-          placeholder="Notizen zum Mitglied..."
+          placeholder=""
           value={fields.bemerkungen ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen: e.target.value }))}
           rows={3}
@@ -502,13 +510,13 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="vorname">{fieldLabel('mitglieder', 'vorname')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="vorname"
-          placeholder="z. B. Max"
+          placeholder=""
           value={fields.vorname ?? ''}
           onChange={e => setFields(f => ({ ...f, vorname: e.target.value }))}
           required
         />
         {showErrors && !fields.vorname && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('mitglieder', 'vorname')}</p>
         )}
       </div>
     ),
@@ -517,13 +525,13 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
         <Label htmlFor="nachname">{fieldLabel('mitglieder', 'nachname')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Input
           id="nachname"
-          placeholder="z. B. Mustermann"
+          placeholder=""
           value={fields.nachname ?? ''}
           onChange={e => setFields(f => ({ ...f, nachname: e.target.value }))}
           required
         />
         {showErrors && !fields.nachname && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('mitglieder', 'nachname')}</p>
         )}
       </div>
     ),
@@ -801,9 +809,25 @@ export function MitgliederDialog({ open, onClose, onSubmit, defaultValues, recor
               const renderField = (k: string) => {
                 const inlineHints = computedLayout.anchors[k] ?? [];
                 const refs = applookupRefs[k] ?? [];
+                // A field the plan gives to a TOOL. On CREATE it is not shown
+                // at all — the value does not exist yet and typing one only
+                // gets overwritten. On EDIT it stays a normal input with a
+                // note: when a tool could not compose its value (a missing
+                // ingredient), this is the only place to repair the record.
+                if (SYSTEM_ASSIGNED.includes(k) && !recordId) {
+                  return (
+                    <div key={k} className="space-y-1.5 min-w-0">
+                      <Label>{fieldLabel('mitglieder', k)}</Label>
+                      <p className="text-sm text-muted-foreground">{t('assigned_by_system')}</p>
+                    </div>
+                  );
+                }
                 return (
                   <div key={k} className="space-y-1.5 min-w-0">
                     {fieldBlocks[k]}
+                    {SYSTEM_ASSIGNED.includes(k) && (
+                      <p className="text-xs text-muted-foreground">{t('assigned_by_system')}</p>
+                    )}
                     {refs.map(({ lookupKey }) => {
                       // Show the live numeric value the formula will pull from
                       // the selected lookup target (e.g. "Monatspreis: 34,90 €"

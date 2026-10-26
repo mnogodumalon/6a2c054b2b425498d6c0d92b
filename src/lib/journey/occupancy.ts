@@ -7,8 +7,8 @@
  *
  * Both doors call this: the internal flow with the records from
  * useDashboardData, the public form with the records its grant lists. The
- * RULE (which two fields form the stay, which applookup names the booked
- * resource, which status keys mean the booking occupies nothing) is decided
+ * RULE (which two fields form the stay, which field names the booked
+ * resource — an applookup or a single lookup —, which status keys mean the booking occupies nothing) is decided
  * once by the build agent — nothing here guesses from field names. Rules:
  *
  *   1. only records of the selected resource count (a room, a vehicle) —
@@ -21,10 +21,15 @@
  * availability claim. A flow that filtered by hand and a public form that
  * blocked every record once showed DIFFERENT calendars for the same rooms.
  */
-import { OCCUPANCY, type OccupancyRule } from '@/config/journey';
+import { OCCUPANCY, TAKEN_BY, type OccupancyRule, type TakenRule } from '@/config/journey';
 import type { EntityKey } from './rules';
 
-export type { OccupancyRule };
+export type { OccupancyRule, TakenRule };
+
+/** Who takes a record of this entity (a booking takes a slot), or undefined. */
+export function takenRuleOf(entity: EntityKey | string): TakenRule | undefined {
+  return (TAKEN_BY as Record<string, TakenRule | undefined>)[entity];
+}
 
 export interface OccupancyRange {
   start: string;
@@ -32,7 +37,7 @@ export interface OccupancyRange {
 }
 
 export interface OccupancyOptions {
-  /** The picked resource's record id (room, vehicle) — when the rule names a resource. */
+  /** The picked resource: a record id (room, vehicle) or a lookup key (place number) — when the rule names a resource. */
   resource?: string | null;
   /** Count cancelled/free records as occupied too (default false). */
   includeFree?: boolean;
@@ -82,4 +87,19 @@ export function occupancyFor(
       end: r.fields[rule.to] ? String(r.fields[rule.to]).slice(0, 10) : null,
     }))
     .filter(b => b.start);
+}
+
+
+/** The ids of the records the taking records point at (REST URL, grant ref or bare id). */
+export function takenIdsFrom(rule: TakenRule, records: { fields: Record<string, unknown> }[]): Set<string> {
+  const out = new Set<string>();
+  const add = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(add); return; }
+    const s = keyOf(v);
+    if (!s) return;
+    const id = s.replace(/\/+$/, '').split('/').pop();
+    if (id) out.add(id);
+  };
+  for (const r of records) add(r.fields[rule.field]);
+  return out;
 }

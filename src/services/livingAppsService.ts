@@ -1,7 +1,7 @@
 // AUTOMATICALLY GENERATED SERVICE
 import { APP_IDS, LOOKUP_OPTIONS, FIELD_TYPES } from '@/types/app';
 import { ensureUploadableImage } from '@/lib/ai';
-import { REST_URL } from '@/lib/origin';
+import { REST_URL, restFetch } from '@/lib/origin';
 import type { Veranstaltungsteilnahmen, Veranstaltungen, Mitglieder, BeitraegeZahlungen, CreateVeranstaltungsteilnahmen, CreateVeranstaltungen, CreateMitglieder, CreateBeitraegeZahlungen } from '@/types/app';
 
 // Base Configuration — the host is a RUNTIME fact (lib/origin.ts):
@@ -38,6 +38,9 @@ export function createRecordUrl(appId: string, recordId: string): string {
 export class LivingAppsApiError extends Error {
   status: number;
   type?: string;
+  /** Stable error type identifier — the last path segment of `type`
+   *  (v1: `…/rest/v1/docs/errors/<id>`, e.g. `no_app_permission`). */
+  code?: string;
   control_identifier?: string;
   control_type?: string;
   field_type?: string;
@@ -48,6 +51,7 @@ export class LivingAppsApiError extends Error {
     this.status = status;
     if (raw) {
       this.type = typeof raw.type === 'string' ? raw.type : undefined;
+      this.code = this.type ? this.type.replace(/\/+$/, '').split('/').pop() : undefined;
       this.control_identifier = typeof raw.control_identifier === 'string' ? raw.control_identifier : undefined;
       this.control_type = typeof raw.control_type === 'string' ? raw.control_type : undefined;
       this.field_type = typeof raw.field_type === 'string' ? raw.field_type : undefined;
@@ -127,7 +131,7 @@ async function callApi(method: string, endpoint: string, data?: any, options?: C
   const silent = options?.silent === true;
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    response = await restFetch(`${API_BASE_URL}${endpoint}`, {
       method,
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',  // Nutze Session Cookies für Auth
@@ -147,8 +151,10 @@ async function callApi(method: string, endpoint: string, data?: any, options?: C
     throw netErr;
   }
   if (!response.ok) {
-    // 401/403 go to the login screen only — never to the errorbus (repair can't fix auth).
-    const isAuthError = response.status === 401 || response.status === 403;
+    // 401 = not signed in → the login screen, never the errorbus (repair can't fix auth).
+    // 403 = signed in, but this list is not theirs to read or write: a notice,
+    // the page stays (05.10.2026 — it used to say „not logged in“ and blank everything).
+    const isAuthError = response.status === 401;
     if (isAuthError) window.dispatchEvent(new Event('auth-error'));
     const { message, raw } = await parseErrorBody(response);
     const err = new LivingAppsApiError(message, response.status, raw);
@@ -179,13 +185,16 @@ export async function uploadFile(file: File | Blob, filename?: string): Promise<
   if (file instanceof File) file = await ensureUploadableImage(file);
   const formData = new FormData();
   formData.append('file', file, filename ?? (file instanceof File ? file.name : 'upload'));
-  const res = await fetch(`${API_BASE_URL}/files`, {
+  const res = await restFetch(`${API_BASE_URL}/files`, {
     method: 'POST',
     credentials: 'include',
     body: formData,
   });
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) window.dispatchEvent(new Event('auth-error'));
+    if (res.status === 401) window.dispatchEvent(new Event('auth-error'));
+    else if (res.status === 403) window.dispatchEvent(new CustomEvent('errorbus:emit', { detail: {
+      source: 'api', status: 403, message: 'File upload failed: 403',
+    } }));
     throw new Error(`File upload failed: ${res.status}`);
   }
   const data = await res.json();

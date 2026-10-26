@@ -52,4 +52,14 @@ export const INTENTS: IntentLink[] = [
  * purpose — a scaffold update resets it to false (self-healing if Phase 2
  * never ran).
  */
-export const INTENTS_PENDING = true;
+export const INTENTS_PENDING = false;
+
+/**
+ * When the Phase-1 bundle was deployed (ISO, set by the service together with
+ * INTENTS_PENDING). The sidebar stops showing the ghost row PENDING_MAX_MINUTES
+ * later on its own: a Phase 2 that ended red (or never ran) used to leave a
+ * pulsing "werden erstellt …" in every deployed Phase-1 bundle forever — no
+ * code path redeploys Phase 1 without the flag (live 03.09.2026).
+ */
+export const INTENTS_PENDING_SINCE: string | null = null;
+export const PENDING_MAX_MINUTES = 30;

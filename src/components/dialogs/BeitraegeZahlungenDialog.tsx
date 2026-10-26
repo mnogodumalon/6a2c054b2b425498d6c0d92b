@@ -28,6 +28,7 @@ import type { ComputedContext } from '@/config/form-enhancements/types';
 import { applyFieldOrder, flattenFieldOrder, applyDefaults, evalComputed, numberInputProps, clampNumberValue, classifyComputed, extractApplookupRefs, mergeApplookupRefs, resolveApplookupRef } from '@/config/form-enhancements/types';
 import { formEnhancements, computedDeps, computedApplookupRefs } from '@/config/form-enhancements/BeitraegeZahlungen';
 import { AttachmentsSection } from '@/components/AttachmentsSection';
+import { requiredMessage } from '@/lib/journey/messages';
 import { t, appLabel, fieldLabel, lookupLabel, localeTag, CURRENCY } from '@/i18n';
 import { Textarea } from '@/components/ui/textarea';
 import { Combobox } from '@/components/Combobox';
@@ -119,6 +120,8 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
     setCreateMitgliederInitial(q);
     setCreateMitgliederOpen(true);
   }
+  // Fields the plan assigns to a tool (empty without a plan).
+  const SYSTEM_ASSIGNED: string[] = [];
   const [showErrors, setShowErrors] = useState(false);
   const REQUIRED_FIELDS = ['mitglied', 'beitragsjahr', 'beitragshoehe', 'zahlungsart', 'zahlungsstatus'] as const;
   const missingRequired = REQUIRED_FIELDS.filter(k => {
@@ -349,7 +352,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Label htmlFor="mitglied">{fieldLabel('beitraege_zahlungen', 'mitglied')} <span className="text-destructive" aria-hidden="true">*</span></Label>
         <Combobox
           id="mitglied"
-          placeholder="Mitglied wählen"
+          placeholder=""
           items={mitgliederListAll.map(r => ({
             id: r.record_id,
             label: String(r.fields.vorname ?? r.record_id),
@@ -360,7 +363,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
           createLabel={t('create_in', { entity: appLabel('mitglieder') })}
         />
         {showErrors && !fields.mitglied && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('beitraege_zahlungen', 'mitglied')}</p>
         )}
       </div>
     ),
@@ -370,14 +373,15 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Input
           id="beitragsjahr"
           type="number"
+          inputMode="decimal"
           step="any"
           {...numberInputProps(formEnhancements, 'beitragsjahr')}
-          placeholder="z. B. 2026"
+          placeholder=""
           value={fields.beitragsjahr !== undefined ? fields.beitragsjahr : (computedValues['beitragsjahr'] ?? '')}
           onChange={e => setFields(f => ({ ...f, beitragsjahr: clampNumberValue(formEnhancements, 'beitragsjahr', e.target.value) }))}
         />
         {showErrors && !fields.beitragsjahr && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('beitraege_zahlungen', 'beitragsjahr')}</p>
         )}
       </div>
     ),
@@ -387,14 +391,15 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Input
           id="beitragshoehe"
           type="number"
+          inputMode="decimal"
           step="any"
           {...numberInputProps(formEnhancements, 'beitragshoehe')}
-          placeholder="z. B. 50,00"
+          placeholder=""
           value={fields.beitragshoehe !== undefined ? fields.beitragshoehe : (computedValues['beitragshoehe'] ?? '')}
           onChange={e => setFields(f => ({ ...f, beitragshoehe: clampNumberValue(formEnhancements, 'beitragshoehe', e.target.value) }))}
         />
         {showErrors && !fields.beitragshoehe && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('beitraege_zahlungen', 'beitragshoehe')}</p>
         )}
       </div>
     ),
@@ -443,7 +448,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
           </button>
         </div>
         {showErrors && !fields.zahlungsart && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('beitraege_zahlungen', 'zahlungsart')}</p>
         )}
       </div>
     ),
@@ -452,7 +457,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Label htmlFor="zahlungsdatum">{fieldLabel('beitraege_zahlungen', 'zahlungsdatum')}</Label>
         <DatePicker
           id="zahlungsdatum"
-          placeholder="Wann bezahlt?"
+          placeholder=""
           mode="date"
           value={fields.zahlungsdatum ?? null}
           onChange={v => setFields(f => ({ ...f, zahlungsdatum: v ?? undefined }))}
@@ -517,7 +522,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
           </button>
         </div>
         {showErrors && !fields.zahlungsstatus && (
-          <p className="text-xs text-destructive mt-1">{t('required_hint')}</p>
+          <p className="text-xs text-destructive mt-1" role="alert">{requiredMessage('beitraege_zahlungen', 'zahlungsstatus')}</p>
         )}
       </div>
     ),
@@ -526,7 +531,7 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
         <Label htmlFor="bemerkungen_zahlung">{fieldLabel('beitraege_zahlungen', 'bemerkungen_zahlung')}</Label>
         <Textarea
           id="bemerkungen_zahlung"
-          placeholder="Notizen zur Zahlung..."
+          placeholder=""
           value={fields.bemerkungen_zahlung ?? ''}
           onChange={e => setFields(f => ({ ...f, bemerkungen_zahlung: e.target.value }))}
           rows={3}
@@ -807,9 +812,25 @@ export function BeitraegeZahlungenDialog({ open, onClose, onSubmit, defaultValue
               const renderField = (k: string) => {
                 const inlineHints = computedLayout.anchors[k] ?? [];
                 const refs = applookupRefs[k] ?? [];
+                // A field the plan gives to a TOOL. On CREATE it is not shown
+                // at all — the value does not exist yet and typing one only
+                // gets overwritten. On EDIT it stays a normal input with a
+                // note: when a tool could not compose its value (a missing
+                // ingredient), this is the only place to repair the record.
+                if (SYSTEM_ASSIGNED.includes(k) && !recordId) {
+                  return (
+                    <div key={k} className="space-y-1.5 min-w-0">
+                      <Label>{fieldLabel('beitraege_zahlungen', k)}</Label>
+                      <p className="text-sm text-muted-foreground">{t('assigned_by_system')}</p>
+                    </div>
+                  );
+                }
                 return (
                   <div key={k} className="space-y-1.5 min-w-0">
                     {fieldBlocks[k]}
+                    {SYSTEM_ASSIGNED.includes(k) && (
+                      <p className="text-xs text-muted-foreground">{t('assigned_by_system')}</p>
+                    )}
                     {refs.map(({ lookupKey }) => {
                       // Show the live numeric value the formula will pull from
                       // the selected lookup target (e.g. "Monatspreis: 34,90 €"

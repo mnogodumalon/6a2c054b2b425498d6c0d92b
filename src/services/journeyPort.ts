@@ -10,8 +10,8 @@
  * page itself (LivingAppsService), never inside a shared step.
  */
 import { LivingAppsService, createRecordUrl, type RecordQuery } from '@/services/livingAppsService';
-import { toWirePayload, type JourneyPort, type JourneyRecord } from '@/lib/journey/port';
-import { buildSearchFilter } from '@/lib/journey/search';
+import { toWirePayload, type InternalJourneyPort, type JourneyRecord } from '@/lib/journey/port';
+import { buildSearchFilter, byIdFilter, combineFilters } from '@/lib/journey/search';
 import type { EntityKey } from '@/lib/journey/rules';
 
 type RawRecord = { record_id: string; fields: Record<string, unknown>; createdat?: string | null };
@@ -46,11 +46,18 @@ const creators: Record<EntityKey, (fields: Record<string, unknown>) => Promise<R
   'beitraege_zahlungen': fields => LivingAppsService.createBeitraegeZahlungenEntry(fields as never),
 };
 
+const updaters: Record<EntityKey, (id: string, fields: Record<string, unknown>) => Promise<RawMutation>> = {
+  'veranstaltungsteilnahmen': (id, fields) => LivingAppsService.updateVeranstaltungsteilnahmenEntry(id, fields as never),
+  'veranstaltungen': (id, fields) => LivingAppsService.updateVeranstaltungenEntry(id, fields as never),
+  'mitglieder': (id, fields) => LivingAppsService.updateMitgliederEntry(id, fields as never),
+  'beitraege_zahlungen': (id, fields) => LivingAppsService.updateBeitraegeZahlungenEntry(id, fields as never),
+};
+
 function toJourneyRecord(r: RawRecord): JourneyRecord {
   return { id: r.record_id, fields: r.fields ?? {}, createdAt: r.createdat ?? null };
 }
 
-export const servicePort: JourneyPort = {
+export const servicePort: InternalJourneyPort = {
   door: 'internal',
   async list(entity, opts) {
     // Only a bare list(entity) (or an empty options object) takes the historic
@@ -60,25 +67,36 @@ export const servicePort: JourneyPort = {
     // first page because `limit` alone did not count as a query).
     const usesQuery = !!opts && (opts.search !== undefined || opts.offset !== undefined
       || opts.orderby !== undefined || opts.fields !== undefined || opts.signal !== undefined
-      || opts.limit !== undefined);
+      || opts.limit !== undefined || opts.filter !== undefined);
     if (!usesQuery) {
       const rows = await listers[entity]();
       const limited = opts?.limit ? rows.slice(0, opts.limit) : rows;
       return limited.map(toJourneyRecord);
     }
-    const filter = opts.search ? buildSearchFilter(opts.search.query, opts.search.fields) ?? undefined : undefined;
+    const filter = combineFilters(opts.filter, opts.search ? buildSearchFilter(opts.search.query, opts.search.fields) : undefined);
     const rows = await queriers[entity]({
       filter, orderby: opts.orderby, limit: opts.limit, offset: opts.offset, fields: opts.fields, signal: opts.signal,
     });
     return rows.map(toJourneyRecord);
   },
   async count(entity, opts) {
-    const filter = opts?.search ? buildSearchFilter(opts.search.query, opts.search.fields) ?? undefined : undefined;
+    const filter = combineFilters(opts?.filter, opts?.search ? buildSearchFilter(opts.search.query, opts.search.fields) : undefined);
     return counters[entity](filter, opts?.signal);
+  },
+  async get(entity, id) {
+    // One query on the server, not the whole table: `r.id` is the vSQL name
+    // of the record id (a live page wrote `r.record_id` and got a 400).
+    const rows = await queriers[entity]({ filter: byIdFilter(id), limit: 1 });
+    return rows[0] ? toJourneyRecord(rows[0]) : null;
   },
   async create(entity, values) {
     const r = await creators[entity](toWirePayload(entity, values, servicePort));
     return { id: r.record_id, fields: r.fields ?? {}, createdAt: r.created_at ?? null };
+  },
+  // The same payload rules as create — plain ids in, references shaped here.
+  async update(entity, id, values) {
+    const r = await updaters[entity](id, toWirePayload(entity, values, servicePort));
+    return { id: r.record_id || id, fields: r.fields ?? {}, createdAt: r.created_at ?? null };
   },
   ref: (appId, recordId) => createRecordUrl(appId, recordId),
 };

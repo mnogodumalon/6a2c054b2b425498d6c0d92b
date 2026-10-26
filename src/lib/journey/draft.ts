@@ -65,7 +65,10 @@ export function readJourneyDraft(draftKey: string): JourneyDraft | null {
 
 export function writeJourneyDraft(draftKey: string, draft: JourneyDraft): void {
   try {
-    window.localStorage.setItem(draftStorageKey(draftKey), JSON.stringify(draft));
+    // a chosen file (data URL, up to ~13 MB) never goes into the draft — it
+    // would fill the storage and lose the whole draft; the person picks it again
+    window.localStorage.setItem(draftStorageKey(draftKey), JSON.stringify(draft, (_k, v) =>
+      (typeof v === 'string' && v.startsWith('data:') ? undefined : v)));
   } catch {
     /* storage unavailable — the wizard still works, just without a draft */
   }

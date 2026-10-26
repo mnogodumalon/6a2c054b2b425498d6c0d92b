@@ -11,7 +11,7 @@ export const formEnhancements: FormEnhancements = {
     'bemerkungen_zahlung',
   ],
   defaults: {
-    'beitragsjahr': { kind: 'literal', value: 2026 },
+    'beitragsjahr': { kind: 'currentYear' },
     'zahlungsstatus': { kind: 'lookup', key: 'offen', label: 'Offen' },
     'zahlungsart': { kind: 'lookup', key: 'ueberweisung', label: 'Überweisung' },
   },

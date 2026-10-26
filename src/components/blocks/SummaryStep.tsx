@@ -1,12 +1,14 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, type ReactNode, useState } from 'react';
+import { getAppMapCached, markSeen } from '@/lib/appMap';
 import { Button } from '@/components/ui/button';
 import { IconAlertCircle, IconCheck, IconCircleDashed, IconLoader2, IconX } from '@tabler/icons-react';
 import { t } from '@/i18n';
 import { planProvidedKeys } from '@/lib/journey/port';
+import { EMPTY_VALUE } from '@/lib/journey/format';
 import { mergeSummaryRows } from '@/lib/journey/summary';
 import { entityLabel, isEmptyValue, labelOf } from '@/lib/journey/rules';
 import type { StepForm, SummaryItem } from '@/lib/journey/useStepForm';
-import type { JourneySubmit, PlanStep } from '@/lib/journey/useJourneySubmit';
+import { stepVerb, type JourneySubmit, type PlanStep } from '@/lib/journey/useJourneySubmit';
 import { useWizard } from './IntentWizardShell';
 
 /**
@@ -34,7 +36,7 @@ export interface SummaryStepProps {
   /** Extra rows the forms do not know about (a computed total, a picked option). */
   items?: SummaryItem[];
   /** Override the jump: default uses the shell (goTo step + focus field + return here). */
-  onEdit?: (step: number, fieldId: string) => void;
+  onEdit?: (step: number, fieldId?: string) => void;
   /** Rendered between the answers and the confirm area. */
   children?: ReactNode;
 }
@@ -64,9 +66,22 @@ export function SummaryStep({
   const suppressHeading = wizard?.suppressHeading;
   useEffect(() => suppressHeading?.(), [suppressHeading]);
 
+  // A required field the PLAN fills at submit (a `link` to an earlier step's
+  // record, a `values` entry) is nobody's answer: it would show as "Patient —"
+  // here (live) although nothing is missing. The success page already hides it.
+  const answered = (f: StepForm): SummaryItem[] => {
+    const provided = planProvidedKeys(submit.plan.find(s => s.form === f));
+    return f.summary().filter(r => !(r.value === EMPTY_VALUE && (r.keys ?? []).length > 0 && (r.keys ?? []).every(k => provided.has(k))));
+  };
+  // The record an update step CHANGES comes first — it is the answer to
+  // "which one?", and no form carries it (the target is a pick, not a field).
+  const targetRows: SummaryItem[] = submit.plan.flatMap(s => {
+    const row = s.target?.();
+    return row ? [row] : [];
+  });
   // Page `items` refine, never double: an item covering a form field's keys
   // (or its label in the same step) replaces that form row.
-  const rows: SummaryItem[] = mergeSummaryRows(forms.flatMap(f => f.summary()), items);
+  const rows: SummaryItem[] = mergeSummaryRows([...targetRows, ...forms.flatMap(answered)], items);
   const groups = new Map<number | undefined, SummaryItem[]>();
   for (const row of rows) {
     const list = groups.get(row.step) ?? [];
@@ -74,6 +89,34 @@ export function SummaryStep({
     groups.set(row.step, list);
   }
   const groupKeys = [...groups.keys()].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+  // What the flow sets itself (a status, a type) — after the answers, with
+  // the link to „Nach dem Bau“ where the owner changes it. Not an answer, so
+  // never merged with the form rows and never "missing".
+  const settingRows: SummaryItem[] = submit.plan.flatMap(s => s.settings?.() ?? []);
+  // The planner's assumptions that first act here, shown ONCE: the plan
+  // remembers `seen` / `answered`, read from the map (cached per page load).
+  const notices = submit.plan.flatMap(s => s.notices?.() ?? []);
+  const [noticeState, setNoticeState] = useState<Record<string, { seen: boolean; answered: boolean }> | null>(null);
+  useEffect(() => {
+    if (notices.length === 0) return;
+    let alive = true;
+    getAppMapCached().then(st => {
+      if (!alive) return;
+      if (!st.canChange) { setNoticeState({}); return; }   // an assumption is the owner's to settle, not the staff's
+      const out: Record<string, { seen: boolean; answered: boolean }> = {};
+      for (const n of notices) {
+        const line = st.map?.lines.find(l => l.id === `question:${n.id}`);
+        out[n.id] = { seen: !!line?.seen, answered: !!line?.answered };
+      }
+      setNoticeState(out);
+    }).catch(() => setNoticeState({}));
+    return () => { alive = false; };
+  }, [notices.length]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const openNotices = noticeState ? notices.filter(n => noticeState[n.id] && !noticeState[n.id].seen && !noticeState[n.id].answered) : [];
+  const seenNotice = (id: string) => {
+    setNoticeState(prev => prev ? { ...prev, [id]: { ...prev[id], seen: true } } : prev);
+    markSeen(`question:${id}`).catch(() => undefined);
+  };
 
   // Missing = required, empty, ASKED FOR by the form (bound) and not supplied
   // by its plan step (values, link). A required field the flow never asks for
@@ -87,13 +130,18 @@ export function SummaryStep({
       .map(k => ({ label: labelOf(f.entity, k), fieldId: f.fieldId(k), step: f.stepOf(k) }));
   });
 
-  const edit = (step: number | undefined, fieldId: string) => {
+  const edit = (step: number | undefined, fieldId?: string) => {
     if (step === undefined) return;
     if (onEdit) onEdit(step, fieldId);
     else wizard?.goTo(step, { focus: fieldId, returnTo: wizard.step });
   };
 
-  const canEdit = (step: number | undefined) => step !== undefined && (Boolean(onEdit) || Boolean(wizard));
+  // "Ändern" only where the jump leads somewhere else: a field the page
+  // declared on the review step itself (live: anmeldedatum/status/bezahlt in
+  // `steps: { …: 3 }` with no input on step 3) would jump to the page the
+  // user is already on — a button that does nothing.
+  const canEdit = (step: number | undefined) =>
+    step !== undefined && step !== wizard?.step && (Boolean(onEdit) || Boolean(wizard));
   const showPlan = submit.plan.length > 1 && (submit.submitting || submit.error !== null || submit.doneCount > 0);
   const savedLabels = submit.plan.filter(s => submit.status[s.key] === 'done').map(stepLabelOf);
 
@@ -109,7 +157,7 @@ export function SummaryStep({
         // `keys: ['_recordId']`) are one choice, not many fields: one "Auswahl
         // ändern" on the group instead of a per-row "Ändern" that can only lead
         // back to the picker (live-seen: Anreisedatum → Ändern → record list).
-        const oneSource = groupRows.length > 1 && groupRows.every(r => r.keys.join('|') === groupRows[0].keys.join('|'));
+        const oneSource = groupRows.length > 1 && groupRows.every(r => (r.keys ?? []).join('|') === (groupRows[0].keys ?? []).join('|'));
         const groupEdit = oneSource && canEdit(step) ? groupRows[0] : null;
         return (
         <section key={step ?? 'none'} className="rounded-2xl border border-border bg-card overflow-hidden">
@@ -127,11 +175,16 @@ export function SummaryStep({
               )}
             </h3>
           )}
-          <dl className="divide-y divide-border">
+          {/* `@container`: the two-column row follows the CARD's width, not the
+              viewport's. Next to the sidebar a 965px window leaves the card
+              ~360px; the viewport `sm:` grid then squeezed the value track to
+              a few pixels and "Abgeschlossen" fell apart letter by letter
+              (inclou, 24.09.2026). Below 28rem the value takes its own line. */}
+          <dl className="divide-y divide-border @container">
             {groupRows.map(row => (
-              <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-5 py-3 items-baseline">
+              <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto] @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-5 py-3 items-baseline">
                 <dt className="text-sm text-muted-foreground">{row.label}</dt>
-                <dd className="text-sm font-medium break-words col-span-2 sm:col-span-1 order-3 sm:order-none">{row.value}</dd>
+                <dd className="text-sm font-medium break-words min-w-0 col-span-2 @md:col-span-1 order-3 @md:order-none">{row.value}</dd>
                 <div className="justify-self-end">
                   {!groupEdit && canEdit(row.step) && (
                     <button
@@ -148,8 +201,45 @@ export function SummaryStep({
             ))}
           </dl>
         </section>
-        );
+      );
       })}
+
+      {settingRows.length > 0 && (
+        <section className="rounded-[27px] bg-card shadow-lg overflow-hidden" aria-label={t('ss_set_by_flow')} data-journey-settings="">
+          <h3 className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-secondary border-b border-input">
+            {t('ss_set_by_flow')}
+          </h3>
+          <dl className="divide-y divide-border @container">
+            {settingRows.map(row => (
+              <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto] @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-5 py-3 items-baseline">
+                <dt className="text-sm text-muted-foreground">{row.label}</dt>
+                <dd className="text-sm font-medium break-words min-w-0 col-span-2 @md:col-span-1 order-3 @md:order-none">{row.value}</dd>
+                <div className="justify-self-end">
+                  {row.href && (
+                    <a href={row.href} className="text-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded" aria-label={`${t('ss_change')}: ${row.label}`}>
+                      {t('ss_change')}
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+
+      {openNotices.length > 0 && (
+        <div className="space-y-2" data-journey-notices="">
+          {openNotices.map(n => (
+            <div key={n.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+              <span className="min-w-0 flex-1">{n.question} {t('ss_notice_assumed', { value: n.assumed })} <span className="text-muted-foreground">{t('ss_notice_once')}</span></span>
+              <span className="flex gap-1">
+                <button type="button" onClick={() => seenNotice(n.id)} className="rounded-lg border border-border px-3 py-1 font-semibold hover:bg-secondary">{t('ss_notice_ok')}</button>
+                <a href={`#/verwaltung/anwendung?line=question:${n.id}`} className="rounded-lg px-3 py-1 font-semibold text-primary hover:underline">{t('ss_change')}</a>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {children}
 
@@ -184,7 +274,11 @@ export function SummaryStep({
                 {s === 'idle' && <IconCircleDashed size={16} className="text-muted-foreground shrink-0" aria-hidden="true" />}
                 <span className="font-medium">{stepLabelOf(step)}</span>
                 <span className="text-muted-foreground">
-                  {s === 'done' ? t('ss_step_done') : s === 'failed' ? t('ss_step_failed') : s === 'running' ? t('ss_step_running') : t('ss_step_idle')}
+                  {s === 'done'
+                    ? (stepVerb(step) === 'update' ? t('ss_step_done_updated') : t('ss_step_done'))
+                    : s === 'failed' ? t('ss_step_failed')
+                      : s === 'running' ? (stepVerb(step) === 'update' ? t('ss_step_running_updated') : t('ss_step_running'))
+                        : t('ss_step_idle')}
                 </span>
               </li>
             );
@@ -209,7 +303,7 @@ export function SummaryStep({
         {whatHappensNext && <p className="text-sm text-muted-foreground flex-1">{whatHappensNext}</p>}
         <Button
           type="button"
-          onClick={() => void submit.run()}
+          onClick={() => { submit.remember(rows); void submit.run(); }}
           disabled={submit.submitting || missing.length > 0}
           className="gap-2 sm:ml-auto"
           data-journey-confirm=""

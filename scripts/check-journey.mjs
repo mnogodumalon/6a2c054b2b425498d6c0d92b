@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// check-journey.mjs — is the agent's occupancy decision in src/config/journey.ts
-// consistent with the app metadata?
+// check-journey.mjs — are the agent's journey decisions consistent with the app
+// metadata? (1) the occupancy decision in src/config/journey.ts, (2) the
+// required-field sentences in src/lib/journey/messages.ts.
 //
 // The decision itself (stay or not, which field is the resource, which
 // statuses do not occupy) is the build agent's; this gate checks only FORM:
-// every entity exists, from/to are date fields, the resource is an applookup,
+// every entity exists, from/to are date fields, the resource is an applookup
+// or a single lookup (a place number),
 // the status field is a lookup and its free keys are real options. A typo
 // here would silently disable the calendar on both doors.
 import { existsSync, readFileSync } from 'node:fs';
@@ -69,8 +71,8 @@ if (block) {
       }
       if (resource !== undefined) {
         if (!controls[resource]) errors.push(`${FILE}: '${entity}.${resource}' (resource) is not a field of the entity`);
-        else if (!String(controls[resource].fulltype ?? '').includes('applookup')) {
-          errors.push(`${FILE}: '${entity}.${resource}' (resource) is ${controls[resource].fulltype} — the resource must be an applookup field`);
+        else if (!/^(applookup|lookup\/)/.test(String(controls[resource].fulltype ?? ''))) {
+          errors.push(`${FILE}: '${entity}.${resource}' (resource) is ${controls[resource].fulltype} — the resource must be an applookup or a single lookup field`);
         }
       }
       if (statusField !== undefined) {
@@ -92,9 +94,57 @@ if (block) {
   }
 }
 
+// ── Required-field sentences ────────────────────────────────────────────────
+// The sentences are the agent's; this checks FORM only: the block exists, every
+// entity and field is real. A required field WITHOUT a sentence is reported as
+// a note (the label sentence covers it) — never an error, a rewrite for wording
+// is not worth a build cycle.
+const MESSAGES = 'src/lib/journey/messages.ts';
+let sentences = 0;
+let uncovered = [];
+if (existsSync(MESSAGES)) {
+  const msrc = readFileSync(MESSAGES, 'utf8');
+  const mblock = /\/\/ <custom:messages>([\s\S]*?)\/\/ <\/custom:messages>/.exec(msrc);
+  if (!mblock) {
+    errors.push(`${MESSAGES}: the <custom:messages> marker block is missing — restore it (the scaffold owns the file outside the markers)`);
+  } else {
+    const covered = new Map();
+    for (const line of mblock[1].split('\n')) {
+      const em = /^\s*['"]?([a-z0-9_]+)['"]?\s*:\s*\{(.*)\},?\s*$/.exec(line);
+      if (!em) continue;
+      const [, entity, body] = em;
+      const app = apps[entity];
+      if (Object.keys(apps).length && !app) {
+        errors.push(`${MESSAGES}: unknown entity '${entity}' — the keys are: ${Object.keys(apps).join(', ')}`);
+        continue;
+      }
+      const controls = app?.controls ?? {};
+      const keys = new Set();
+      for (const fm of body.matchAll(/(?:^|[{,])\s*([a-z][a-z0-9_]*)\s*:\s*"/g)) {
+        const key = fm[1];
+        if (Object.keys(controls).length && !controls[key]) {
+          errors.push(`${MESSAGES}: '${entity}.${key}' is not a field of the entity — the fields are: ${Object.keys(controls).join(', ')}`);
+          continue;
+        }
+        keys.add(key);
+        sentences++;
+      }
+      covered.set(entity, keys);
+    }
+    for (const [entity, app] of Object.entries(apps)) {
+      for (const [key, ctrl] of Object.entries(app.controls ?? {})) {
+        if (ctrl.required && !String(ctrl.fulltype ?? '').startsWith('file') && !covered.get(entity)?.has(key)) uncovered.push(`${entity}.${key}`);
+      }
+    }
+  }
+}
+
 if (errors.length) {
   console.error('check-journey: FAILED');
   for (const e of errors) console.error(`  ERROR: ${e}`);
   process.exit(1);
 }
-console.log(`check-journey: OK (${seen.size} occupancy rule(s))`);
+if (uncovered.length) {
+  console.log(`check-journey: note — ${uncovered.length} required field(s) without an own sentence (label sentence applies): ${uncovered.join(', ')}`);
+}
+console.log(`check-journey: OK (${seen.size} occupancy rule(s), ${sentences} field sentence(s))`);

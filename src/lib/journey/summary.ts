@@ -16,7 +16,7 @@ export function mergeSummaryRows(formRows: SummaryItem[], items: SummaryItem[]):
   if (items.length === 0) return formRows;
   const coveredKeys = new Set(items.flatMap(i => i.keys ?? []));
   const coveredLabels = new Set(items.map(labelKey));
-  const kept = formRows.filter(r => !r.keys.some(k => coveredKeys.has(k)) && !coveredLabels.has(labelKey(r)));
+  const kept = formRows.filter(r => !(r.keys ?? []).some(k => coveredKeys.has(k)) && !coveredLabels.has(labelKey(r)));
   // Items themselves: the first wins over a later twin (same key or same label+step).
   const seen = new Set<string>();
   const uniqueItems = items.filter(i => {
@@ -24,6 +24,13 @@ export function mergeSummaryRows(formRows: SummaryItem[], items: SummaryItem[]):
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
+  }).map(i => {
+    if (i.step !== undefined) return i;
+    // An item without a step that refines a form row takes the row's place —
+    // and its step, so it sits in that step's group and offers "Ändern"
+    // (live: a "Nächte" item landed ungrouped at the bottom, not editable).
+    const covered = formRows.find(r => (r.keys ?? []).some(k => (i.keys ?? []).includes(k)));
+    return covered ? { ...i, step: covered.step, fieldId: i.fieldId || covered.fieldId } : i;
   });
   return [...kept, ...uniqueItems];
 }

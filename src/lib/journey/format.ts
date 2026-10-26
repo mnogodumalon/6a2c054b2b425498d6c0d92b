@@ -7,6 +7,8 @@ import { differenceInCalendarDays, format as formatDf, parseISO } from 'date-fns
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/formatters';
 import { dateFnsLocale, localeTag, t, tp } from '@/i18n';
 import { isEmptyValue, optionsOf, ruleOf, type EntityKey } from './rules';
+import { recordIdOf, recordLabelOf } from './recordLabels';
+import { uploadDisplayName } from './upload';
 
 export const EMPTY_VALUE = '—';
 
@@ -27,6 +29,9 @@ export function formatFieldValue(
   switch (rule?.kind) {
     case 'bool':
       return value ? t('v_yes') : t('v_no');
+    // never the data URL (megabytes) — the file's name
+    case 'file':
+      return uploadDisplayName(value);
     case 'date':
       return formatDate(String(value));
     case 'datetime':
@@ -45,13 +50,20 @@ export function formatFieldValue(
       const keys = Array.isArray(value) ? value.map(lookupKeyOf) : [lookupKeyOf(value)];
       return keys.map(k => opts.find(o => o.key === k)?.label ?? k).join(', ');
     }
+    // A record shows its NAME: the form's label, else what any hook on the
+    // page learned about that id, else a readable placeholder. Never the 24-hex
+    // id or the record URL (live: "Zusatzleistungen 6a9ae0fdd32995434b7edfb2").
     case 'record': {
       const id = String(value);
-      return labels[key] ?? labels[id] ?? id;
+      return labels[key] ?? labels[id] ?? recordLabelOf(id) ?? (recordIdOf(id) ? t('v_record_unnamed') : id);
     }
     case 'multirecord': {
       const ids = Array.isArray(value) ? value.map(String) : [String(value)];
-      return ids.map(id => labels[id] ?? id).join(', ');
+      const named = ids.map(id => labels[id] ?? recordLabelOf(id) ?? (recordIdOf(id) ? null : id));
+      const unnamed = named.filter(n => n === null).length;
+      const parts = named.filter((n): n is string => n !== null);
+      if (unnamed > 0) parts.push(tp('v_records_unnamed', unnamed, { n: unnamed }));
+      return parts.join(', ');
     }
     default:
       return String(value);
@@ -59,7 +71,12 @@ export function formatFieldValue(
 }
 
 /** "12.–15. März 2026 · 3 Nächte" / "12–15 Mar 2026 · 3 nights". Departure day is exclusive. */
-export function formatRange(fromIso: string | null | undefined, toIso: string | null | undefined): string {
+/** How a from/to pair counts: hotel nights (departure exclusive), calendar
+ *  days (both ends inclusive) or no count at all. The block never assumes a
+ *  stay — a course, a loan or a project period says 'days'. */
+export type RangeUnit = 'nights' | 'days' | 'none';
+
+export function formatRange(fromIso: string | null | undefined, toIso: string | null | undefined, unit: RangeUnit = 'nights'): string {
   if (!fromIso && !toIso) return EMPTY_VALUE;
   if (!fromIso || !toIso) return formatDate(fromIso ?? toIso ?? undefined);
   const from = parseISO(fromIso);
@@ -75,6 +92,11 @@ export function formatRange(fromIso: string | null | undefined, toIso: string | 
     ? `${formatDf(from, dayFmt, { locale })}–${formatDf(to, fullFmt, { locale })}`
     : `${formatDf(from, shortFmt, { locale })} – ${formatDf(to, fullFmt, { locale })}`;
   const nights = differenceInCalendarDays(to, from);
+  if (unit === 'none' || nights < 0) return span;
+  if (unit === 'days') {
+    const days = nights + 1;
+    return `${span} · ${tp('v_days', days, { n: days })}`;
+  }
   return nights > 0 ? `${span} · ${tp('v_nights', nights, { n: nights })}` : span;
 }
 
@@ -83,4 +105,11 @@ export function formatRange(fromIso: string | null | undefined, toIso: string | 
  *  yesterday after 22:00 in Berlin. */
 export function todayIso(): string {
   return formatDf(new Date(), 'yyyy-MM-dd');
+}
+
+/** Now as `yyyy-MM-dd'T'HH:mm` in the user's local time — the value an
+ *  `initial` gives a datetime field (`erfasst_am: nowIso()`). Lanes grepped the
+ *  tree for this name and, not finding it, built it by hand (live). */
+export function nowIso(): string {
+  return formatDf(new Date(), "yyyy-MM-dd'T'HH:mm");
 }

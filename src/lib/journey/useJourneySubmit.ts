@@ -18,9 +18,9 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { clearJourneyDraft } from './draft';
-import { JourneyPortError, type JourneyPort, type JourneyRecord } from './port';
+import { JourneyPortError, canUpdate, type JourneyPort, type JourneyRecord } from './port';
 import type { EntityKey } from './rules';
-import type { FormValues, StepForm } from './useStepForm';
+import type { FormValues, StepForm, SummaryItem } from './useStepForm';
 
 export interface PlanContext {
   port: JourneyPort;
@@ -41,8 +41,31 @@ export interface PlanStep {
   link?: Record<string, string>;
   /** Steps that must be done first (the plan runs in order anyway). */
   needs?: string[];
+  /** The id of the record this step CHANGES instead of creating one — a status
+   *  flip, a return, a check-in. Payload like a create (form + values + link),
+   *  written through the internal door's `update`; the public door throws.
+   *  Static, or from the done steps (`ctx => ctx.done.pick.id`). */
+  updates?: string | ((ctx: PlanContext) => string | undefined);
+  /** The record `updates` changes, as a review row ("Projekt · Alpha (Nr. 101)"):
+   *  SummaryStep shows it before the answers and the success page repeats it.
+   *  Without it the review listed the new status and the note but never WHICH
+   *  project was being changed (inclou, 24.09.2026). The flow hook fills it
+   *  from its target pick; a hand-written plan may leave it out. */
+  target?: () => SummaryItem | undefined;
+  /** The values this step sets itself (fixed by the plan or the owner's
+   *  policy) as review rows with the link that changes them — shown under
+   *  "Setzt der Ablauf", so nobody wonders where the status came from. */
+  settings?: () => SummaryItem[];
+  /** The planner's minor assumptions that first ACT in this flow (the invoice
+   *  number on the first invoice). The review shows each once — „Passt“ marks it
+   *  seen on the plan, „ändern“ leads to its line on „Deine Anwendung“. */
+  notices?: () => { id: string; question: string; assumed: string }[];
   /** The record this journey is about — reference and facts come from it (default: first step). */
   primary?: boolean;
+  /** What the step does to its record — drives the words in the plan list and the
+   *  success heading ("angelegt" / "aktualisiert"). Default: 'update' for a `run`
+   *  step without a form, 'create' otherwise. */
+  verb?: 'create' | 'update';
   /** Escape hatch for anything that is not a plain create. */
   /** Return the record you touched (a MutationResult from update…Entry works) so the
    *  success screen gets its reference; returning nothing is fine for pure updates. */
@@ -55,6 +78,17 @@ export interface JourneyResult {
   primary: JourneyRecord;
   entity?: EntityKey;
   records: Record<string, JourneyRecord>;
+  /** False when the primary step only updated an existing record — the success
+   *  screen then says "aktualisiert", not "angelegt". */
+  created: boolean;
+  /** The review rows as confirmed (SummaryStep → remember) — the success
+   *  screen's facts when no form carries them (update-only journeys). */
+  summary?: SummaryItem[];
+}
+
+/** The verb of a step: explicit, else derived from its shape. */
+export function stepVerb(step: PlanStep): 'create' | 'update' {
+  return step.verb ?? (step.updates || (step.run && !step.form) ? 'update' : 'create');
 }
 
 export interface JourneySubmit {
@@ -63,6 +97,8 @@ export interface JourneySubmit {
   retry(): Promise<JourneyResult | null>;
   /** Forgets everything — for "create another one". */
   reset(): void;
+  /** The review's rows, kept for the result (SummaryStep calls this on confirm). */
+  remember(rows: SummaryItem[]): void;
   readonly submitting: boolean;
   readonly done: boolean;
   readonly error: Error | null;
@@ -91,7 +127,14 @@ async function createFromStep(step: PlanStep, ctx: PlanContext): Promise<Journey
     if (!rec) throw new JourneyPortError(`Plan step '${step.key}' links '${field}' to '${stepKey}', which has not succeeded.`);
     linked[field] = rec.id;
   }
-  return ctx.port.create(step.entity, { ...base, ...extra, ...linked });
+  const payload = { ...base, ...extra, ...linked };
+  if (step.updates !== undefined) {
+    const id = typeof step.updates === 'function' ? step.updates(ctx) : step.updates;
+    if (!id) throw new JourneyPortError(`Plan step '${step.key}' updates a record but has no id yet.`);
+    if (!canUpdate(ctx.port)) throw new JourneyPortError(`Plan step '${step.key}' updates '${step.entity}' — this door cannot change records (an update step runs under #/intents/… only).`);
+    return ctx.port.update(step.entity, id, payload);
+  }
+  return ctx.port.create(step.entity, payload);
 }
 
 function normalizeRecord(raw: unknown): JourneyRecord | undefined {
@@ -114,6 +157,7 @@ export function useJourneySubmit(
   const doneRef = useRef<Record<string, JourneyRecord>>({});
   const completedRef = useRef<Set<string>>(new Set());
   const busyRef = useRef(false);
+  const rowsRef = useRef<SummaryItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [result, setResult] = useState<JourneyResult | null>(null);
@@ -157,7 +201,7 @@ export function useJourneySubmit(
       // without a reference (live: "The plan produced no record" over two green
       // ticks). run() may return the touched record to get a reference anyway.
       const primary = (primaryStep ? doneRef.current[primaryStep.key] : undefined) ?? { id: '', fields: {}, createdAt: null };
-      const out: JourneyResult = { primary, entity: primaryStep?.entity, records: { ...doneRef.current } };
+      const out: JourneyResult = { primary, entity: primaryStep?.entity, records: { ...doneRef.current }, created: primaryStep ? stepVerb(primaryStep) === 'create' : true, summary: rowsRef.current };
       if (optionsRef.current.draftKey) clearJourneyDraft(optionsRef.current.draftKey);
       setResult(out);
       optionsRef.current.onSuccess?.(out);
@@ -175,7 +219,12 @@ export function useJourneySubmit(
     }
   }, [port, result]);
 
+  const remember = useCallback((rows: SummaryItem[]) => {
+    rowsRef.current = rows;
+  }, []);
+
   const reset = useCallback(() => {
+    rowsRef.current = [];
     doneRef.current = {};
     completedRef.current = new Set();
     busyRef.current = false;
@@ -190,6 +239,7 @@ export function useJourneySubmit(
     run,
     retry: run,
     reset,
+    remember,
     submitting,
     done: result !== null,
     error,

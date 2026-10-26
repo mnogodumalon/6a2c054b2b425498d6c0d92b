@@ -36,6 +36,37 @@ export function buildSearchFilter(query: string, fields: string[]): string | nul
     .join(' and ');
 }
 
+/** `(a) and (b)` over the non-empty parts — a step's standing restriction
+ *  (`filter`) and the typed search share one vSQL request and one count. */
+const RECORD_ID_RE = /^[a-f0-9]{24}$/i;
+
+/** vSQL for ONE record: `r.id == '<id>'`. The record's id is `r.id` in vSQL —
+ *  `r.record_id` (the REST field name) is an unknown name there (live 400,
+ *  VSQLUnknownNameError). The id is validated, not escaped: a 24-hex id
+ *  cannot leave the string literal. */
+export function byIdFilter(id: string): string {
+  if (!RECORD_ID_RE.test(id)) throw new Error(`byIdFilter: '${id}' is not a record id`);
+  return `r.id == '${id.toLowerCase()}'`;
+}
+
+/** vSQL for "the record(s) linked to <id>" through an applookup OR a
+ *  multipleapplookup field: `'<id>' in str(r.v_<field>)`. One shape for both
+ *  arities (probed live: `r.v_kunde.id == '…'` works for a single ref only,
+ *  list comprehensions and indexing are invalid vSQL). Field and id are
+ *  validated, not escaped. */
+export function refFilter(field: string, id: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`refFilter: '${field}' is not a field key`);
+  if (!RECORD_ID_RE.test(id)) throw new Error(`refFilter: '${id}' is not a record id`);
+  return `'${id.toLowerCase()}' in str(r.v_${field})`;
+}
+
+export function combineFilters(...parts: Array<string | null | undefined>): string | undefined {
+  const live = parts.map(p => (p ?? '').trim()).filter(Boolean);
+  if (live.length === 0) return undefined;
+  if (live.length === 1) return live[0];
+  return live.map(p => `(${p})`).join(' and ');
+}
+
 /** Client-side twin of buildSearchFilter for doors that cannot filter server-side (public grants). */
 export function matchesSearch(fields: Record<string, unknown>, query: string, searchFields: string[]): boolean {
   const tokens = sanitizeSearchQuery(query).split(' ').filter(Boolean);

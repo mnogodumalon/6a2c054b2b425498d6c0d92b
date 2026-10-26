@@ -1,78 +1,122 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { INTENTS, INTENTS_PENDING } from '@/config/intents';
+import { IconSettings, IconMap } from '@tabler/icons-react';
+import { INTENTS, INTENTS_PENDING, INTENTS_PENDING_SINCE, PENDING_MAX_MINUTES } from '@/config/intents';
 import { t, locale } from '@/i18n';
+import { usePageJobs } from '@/hooks/usePageJobs';
+import { NavRows, type NavRow } from '@/components/NavRows';
+import { getAppMapCached } from '@/lib/appMap';
+import { usePermissions } from '@/lib/permissions';
+import { FLOW_ENTITIES } from '@/config/plan';
 
 /**
- * IntentsNav — Drawer-Sektion für Intent-Workflow-Seiten ("Abläufe").
+ * IntentsNav — the sidebar list of the dashboard's flows ("Abläufe").
  *
- * Rendert eine <la-nav> (LivingApps Web Component) im select-Modus aus dem
- * `src/config/intents.ts`-Registry: sobald der Intents-Orchestrator dort eine
- * Seite registriert, taucht sie hier auf — kein Layout-Edit nötig. Der
- * Aktiv-Zustand läuft über das `here`-Flag der Items (host-kontrolliert: bei
- * jedem Routenwechsel wird data-nav neu gesetzt, was die interne Auswahl der
- * la-nav zurücksetzt). `nav:select` wird auf React-Routers navigate() gemappt.
+ * Same shape as the platform's own lists (the UL4 template's sidebar): the
+ * section label comes from the surrounding la-nav-section in Layout, one row
+ * per flow from the `src/config/intents.ts` registry (its icon, its label in
+ * the active locale), and — exactly like „Seiten verwalten" in the public
+ * pages widget — a last gear row „Abläufe verwalten" leading to the admin page
+ * where flows are created, changed and removed. No separate create row: the
+ * admin page is the one place for that, as on the platform.
  *
- * Während INTENTS_PENDING (Phase-1-Deploy-Fenster) zeigt die la-nav ihr
- * eingebautes pending-Rendering (pulsierende Zeile). Leer UND nicht pending
- * → nichts.
+ * A flow that is still being built shows as a pulsing row: during the Phase-1
+ * window (INTENTS_PENDING, at most PENDING_MAX_MINUTES after the Phase-1
+ * deploy — a red Phase 2 never redeploys, so the row expires here) and while
+ * a page job creates one from the dashboard (usePageJobs).
  */
-type LaNavItem = { title: string; url?: string; here?: boolean; pending?: boolean; meta?: { path: string } };
+
+/** True while the Phase-1 window is plausibly still open. No stamp (a legacy
+ *  bundle) keeps the old behaviour: pending until the next update. */
+export function isPendingWindowOpen(pending: boolean, since: string | null, maxMinutes: number, now: number = Date.now()): boolean {
+  if (!pending) return false;
+  if (!since) return true;
+  const started = Date.parse(since);
+  if (Number.isNaN(started)) return true;
+  return now - started < maxMinutes * 60_000;
+}
+
+const MANAGE_PATH = '/verwaltung/ablaeufe';
+// The application map — what the built application does and what the owner
+// may change on the running application; a second gear row below "manage".
+const MAP_PATH = '/verwaltung/anwendung';
+
+function labelOf(label: string | { de?: string; en?: string; cs?: string }): string {
+  // Multilingual labels pick the active locale; legacy plain strings render
+  // as-is (pre-i18n dashboards).
+  if (typeof label === 'string') return label;
+  return (label as Record<string, string | undefined>)[locale] ?? label.de ?? label.en ?? label.cs ?? '';
+}
 
 export function IntentsNav() {
   const navigate = useNavigate();
   const location = useLocation();
-  const navRef = useRef<HTMLElement>(null);
 
-  // The group starts OPEN. It used to click its own aria-toggle closed on
-  // mount (a Figma pattern) — which hid the only entry point to every flow
-  // behind a collapsed menu item; the launch review counted it as a top-3
-  // finding. The widget's default (expanded) is the wanted state.
+  const pending = isPendingWindowOpen(INTENTS_PENDING, INTENTS_PENDING_SINCE, PENDING_MAX_MINUTES);
+  const { jobs } = usePageJobs('flow', { idleMs: 60000 });
+  const building = jobs.some(j => j.status === 'running' && !j.target);
 
-  const itemsJson = useMemo(() => {
-    let items: LaNavItem[];
-    if (INTENTS.length === 0) {
-      items = INTENTS_PENDING ? [{ title: t('intents_pending'), pending: true }] : [];
-    } else {
-      items = INTENTS.map(intent => ({
-        // Multilingual labels pick the active locale; legacy plain strings
-        // render as-is (pre-i18n dashboards).
-        title: typeof intent.label === 'string'
-          ? intent.label
-          : (intent.label as Record<string, string | undefined>)[locale] ?? intent.label.de ?? intent.label.en ?? intent.label.cs ?? '',
-        url: `#${intent.path}`,
-        here: location.pathname === intent.path,
-        meta: { path: intent.path },
-      }));
-    }
-    return JSON.stringify(items);
-  }, [location.pathname]);
-
+  const [hasMap, setHasMap] = useState<boolean | null>(null);
   useEffect(() => {
-    const el = navRef.current;
-    if (!el) return;
-    const handler = (e: Event) => {
-      const path = (e as CustomEvent<{ meta?: { path?: string } }>).detail?.meta?.path;
-      if (!path) return;
-      navigate(path);
-      // select-Modus verhindert den nativen Klick, daher kollabiert der
-      // Drawer sein mobiles Vollbild-Overlay nicht selbst — hier nachziehen.
-      if (window.matchMedia('(max-width: 767.98px)').matches) {
-        el.closest('la-drawer')?.setAttribute('collapsed', '');
-      }
-    };
-    el.addEventListener('nav:select', handler);
-    return () => el.removeEventListener('nav:select', handler);
-  }, [navigate]);
+    let on = true;
+    getAppMapCached().then(s => { if (on) setHasMap(!!s.map); }).catch(() => { if (on) setHasMap(false); });
+    return () => { on = false; };
+  }, []);
 
-  if (INTENTS.length === 0 && !INTENTS_PENDING) return null;
+  // a flow writes its lists: without the right to write one of them it is not offered
+  const perms = usePermissions();
+  const rows = useMemo<NavRow[]>(() => {
+    const allowed = INTENTS.filter(intent => {
+      const ents = FLOW_ENTITIES[intent.path.replace(/\/+$/, '').split('/').pop() ?? ''];
+      return !ents || ents.every(e => perms.canWrite(e));
+    });
+    const items: NavRow[] = allowed.map(intent => {
+      const Icon = intent.icon;
+      return {
+        key: intent.path,
+        title: labelOf(intent.label),
+        url: `#${intent.path}`,
+        icon: Icon ? <Icon size={16} stroke={1.5} /> : undefined,
+        here: location.pathname === intent.path,
+      };
+    });
+    if (pending || building) {
+      items.push({ key: 'pending', title: t('intents_pending'), pending: true });
+    }
+    items.push({
+      key: 'manage',
+      title: t('ia_manage'),
+      url: `#${MANAGE_PATH}`,
+      icon: <IconSettings size={16} />,
+      here: location.pathname === MANAGE_PATH,
+    });
+    // „Deine Anwendung“ only when there is a map: a dashboard that was never
+    // orchestrated (legacy, or the update flow added the page) has nothing to show there
+    if (hasMap !== false) {
+      items.push({
+        key: 'map',
+        title: t('am_nav'),
+        url: `#${MAP_PATH}`,
+        icon: <IconMap size={16} />,
+        badge: t('am_beta'),
+        here: location.pathname === MAP_PATH,
+      });
+    }
+    return items;
+  }, [location.pathname, pending, building, hasMap, perms]);
 
-  return (
-    // primary = aufklappbare Gruppe INNERHALB der Aktionen-Sektion (Layout),
-    // gleiches Muster wie „Datenverwaltung" unter Darstellung. dense = die
-    // kleinere Unterpunkt-Schrift (--la-nav-text-size), wie im Gateway.
-    <la-nav-section type="primary" label={t('intents_heading')} dense="">
-      <la-nav ref={navRef} mode="select" data-nav={itemsJson} />
-    </la-nav-section>
-  );
+  const onSelect = (row: NavRow, e: MouseEvent<HTMLAnchorElement>) => {
+    // Plain left click → SPA navigation; modifier clicks keep the href.
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !row.url) return;
+    e.preventDefault();
+    if (row.here) return;
+    navigate(row.url.slice(1));
+    // Mobile: the drawer is a fullscreen overlay — close it after choosing.
+    if (window.matchMedia('(max-width: 767.98px)').matches) {
+      e.currentTarget.closest('la-drawer')?.setAttribute('collapsed', '');
+    }
+  };
+
+  return <NavRows rows={rows} ariaLabel={t('intents_heading')} onSelect={onSelect} />;
 }

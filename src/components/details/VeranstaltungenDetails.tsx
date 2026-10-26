@@ -6,6 +6,7 @@ import {
 } from '@/components/widgets/RecordView';
 import { t, appLabel, fieldLabel } from '@/i18n';
 import { SatelliteSection } from '@/components/SatelliteSection';
+import { usePermissions } from '@/lib/permissions';
 
 export interface VeranstaltungenDetailsProps {
   /** Der Record — enriched oder roh; alle Felder werden hier gerendert. */
@@ -15,7 +16,7 @@ export interface VeranstaltungenDetailsProps {
   /** Zeilen-Klick → overlay.push auf das Veranstaltungsteilnahmen-Detail (nie der Edit-Dialog). */
   onOpenVeranstaltungsteilnahmen: (record: Veranstaltungsteilnahmen) => void;
   /** Kontextuelles „+": öffnet den Veranstaltungsteilnahmen-Dialog mit diesem Record vorgesetzt. */
-  onAddVeranstaltungsteilnahmen: () => void;
+  onAddVeranstaltungsteilnahmen?: () => void;
 }
 
 export function VeranstaltungenDetails({
@@ -24,6 +25,8 @@ export function VeranstaltungenDetails({
   onOpenVeranstaltungsteilnahmen,
   onAddVeranstaltungsteilnahmen,
 }: VeranstaltungenDetailsProps) {
+  // attachments are a write to this record — read-only without the platform right
+  const perms = usePermissions();
   return (
     <>
       <RecordSection title={t('details')} cols={2}>
@@ -47,7 +50,7 @@ export function VeranstaltungenDetails({
         getKey={r => r.record_id}
       />
 
-      <RecordAttachments appId={APP_IDS.VERANSTALTUNGEN} recordId={record.record_id} />
+      <RecordAttachments appId={APP_IDS.VERANSTALTUNGEN} recordId={record.record_id} readOnly={!perms.canWrite('veranstaltungen')} />
     </>
   );
 }

@@ -5,6 +5,7 @@ import {
   RecordSection, RecordField, RecordRelation, RecordAttachments,
 } from '@/components/widgets/RecordView';
 import { t, appLabel, fieldLabel } from '@/i18n';
+import { usePermissions } from '@/lib/permissions';
 
 export interface BeitraegeZahlungenDetailsProps {
   /** Der Record — enriched oder roh; alle Felder werden hier gerendert. */
@@ -20,6 +21,8 @@ export function BeitraegeZahlungenDetails({
   mitgliederList,
   onOpenMitglieder,
 }: BeitraegeZahlungenDetailsProps) {
+  // attachments are a write to this record — read-only without the platform right
+  const perms = usePermissions();
   const mitgliedTarget = mitgliederList.find(r => r.record_id === extractRecordId(record.fields.mitglied));
   return (
     <>
@@ -42,7 +45,7 @@ export function BeitraegeZahlungenDetails({
         />
       </RecordSection>
 
-      <RecordAttachments appId={APP_IDS.BEITRAEGE_ZAHLUNGEN} recordId={record.record_id} />
+      <RecordAttachments appId={APP_IDS.BEITRAEGE_ZAHLUNGEN} recordId={record.record_id} readOnly={!perms.canWrite('beitraege_zahlungen')} />
     </>
   );
 }
